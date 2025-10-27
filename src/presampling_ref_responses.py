@@ -11,13 +11,13 @@ import random
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=10) # 0 for all data
-    parser.add_argument("--K", type=int, default=16) 
+    parser.add_argument("--K", type=int, default=16)
     parser.add_argument("--dataset_path", type=str, default='./data/test/deepscaler.json')  # data path
-    parser.add_argument("--model_name", type=str, default="DeepSeek-R1-Distill-Qwen-1.5B")  
-    parser.add_argument("--max_tokens", type=int, default=16384)   
-    parser.add_argument("--proc_num", type=int, default=512)  
-    parser.add_argument("--nothinking", action='store_true', default=False)   
-    
+    parser.add_argument("--model_name", type=str, default="DeepSeek-R1-Distill-Qwen-1.5B")
+    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument("--proc_num", type=int, default=512)
+    parser.add_argument("--nothinking", action='store_true', default=False)
+
     return parser.parse_args()
 
 args = parse_args()
@@ -28,10 +28,10 @@ dataset = args.dataset_path.split('/')[-1].split('.json')[0].strip()
 num_samples = args.num_samples
 max_tokens = args.max_tokens
 nothinking = args.nothinking
-        
+
 print("INFERENCE:",K,model,dataset,"num:",num_samples)
 suffix = '_nothinking' if nothinking else ''
-fout_path = f"./data/train/ref_presampling/{model}_{dataset}_n{num_samples}_K{K}_len{max_tokens}{suffix}.jsonl"
+fout_path = f"./data/train/ref_presampling/{model.split('/')[-1]}_{dataset}_n{num_samples}_K{K}_len{max_tokens}{suffix}.jsonl"
 os.makedirs("./data/train/ref_presampling", exist_ok=True)
 print("Save to:", fout_path)
 s = set()
@@ -90,7 +90,7 @@ def chat(js):
             with open(fout_path, "a") as fout:
                 fout.write(json.dumps(js, ensure_ascii=False)+'\n')
                 fout.flush()
-            return 1   
+            return 1
     except:
         traceback.print_exc()
         return None
