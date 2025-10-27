@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from sympy import primenu
 from verl import DataProto
 from .adapt_think_rm import adapt_think_rm
 import torch
 from collections import defaultdict
 import numpy as np
 import json
+import math
 from tqdm import tqdm
 
 def sigmoid(x):
@@ -27,13 +29,15 @@ class AdaptThinkRewardManager:
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key='data_source', is_training=True, nothinking_bonus=0, ref_result_file=None) -> None:
+    def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key='data_source', is_training=True, nothinking_bonus=0, ref_result_file=None, max_response_length=512, length_bonus=0) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or adapt_think_rm
         self.reward_fn_key = reward_fn_key
         self.is_training = is_training
         self.nothinking_bonus = nothinking_bonus
+        self.max_response_length = max_response_length
+        self.length_bonus = length_bonus
         if ref_result_file:
             self.problem2ref_metrics = {js['problem'].strip(): js['metrics'] for js in tqdm(json.load(open(ref_result_file, 'r')), desc='LOADING REF METRICS')}
         if self.is_training:
@@ -90,7 +94,7 @@ class AdaptThinkRewardManager:
                 ground_truth=ground_truth,
                 extra_info=extra_info,
             )
-            
+
             uid = data_item.non_tensor_batch['uid'] if self.is_training else 'validate'
             enforce_nothinking = data_item.batch['enforce_nothinking'].item()
             is_nothinking = response_str.strip().startswith('</think>')
@@ -117,6 +121,8 @@ class AdaptThinkRewardManager:
                     })
                 problem = prompt_str.split('<｜User｜>')[1].split('<｜Assistant｜>')[0].strip()
                 assert problem in self.problem2ref_metrics, problem
+                # if problem not in self.problem2ref_metrics:
+                #     continue
                 uid2ref_metrics[uid] = self.problem2ref_metrics[problem]
             else:
                 if is_nothinking:
@@ -133,14 +139,14 @@ class AdaptThinkRewardManager:
                         'thinking_response_length': valid_response_length,
                         'thinking_acc': score['acc'],
                     })
-                    
+
             all_scores.append(score)
             if self.is_training:
                 if score['enforce_nothinking']:
                     id2scores['nothinking'][uid].append(score)
                 else:
                     id2scores['thinking'][uid].append(score)
-            
+
             print_key=f"source_{data_source}_{'nothinking' if is_nothinking else 'thinking'}"
             if print_key not in already_print_data_sources:
                 already_print_data_sources[print_key] = 0
@@ -149,8 +155,8 @@ class AdaptThinkRewardManager:
                 already_print_data_sources[print_key] += 1
                 print(f'\n\n[data_source]{print_key}')
                 print("[prompt]", prompt_str)
-                print("[response]", response_str)
-                print("[ground_truth]", ground_truth)
+                # print("[response]", response_str)
+                # print("[ground_truth]", ground_truth)
                 for key, value in score.items():
                     print(f"[{key}]", value)
 
@@ -166,9 +172,9 @@ class AdaptThinkRewardManager:
                         else:
                             id2mean_len[key][uid] = np.mean(lens)
                             id2std_len[key][uid] = np.std(lens) + 1e-7
-            print(f"id2mean_acc_{key}: {id2mean_acc}")
-            print(f"id2mean_len_{key}: {id2mean_len}")
-        
+            # print(f"id2mean_acc_{key}: {id2mean_acc}")
+            # print(f"id2mean_len_{key}: {id2mean_len}")
+
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
             score = all_scores[i]
@@ -183,11 +189,15 @@ class AdaptThinkRewardManager:
                 ref_metrics = uid2ref_metrics[uid]
                 ref_mean_acc_thinking = ref_metrics['avg_acc_thinking']
 
+                reward = acc - ref_mean_acc_thinking
+                if acc:
+                    efficiency = math.log(response_len / self.max_response_length)
+                    efficiency *= self.length_bonus
+                    reward -= efficiency
+                    print(reward, efficiency)
                 if enforce_nothinking:
-                    reward = acc - ref_mean_acc_thinking + self.nothinking_bonus
-                else:
-                    reward = acc - ref_mean_acc_thinking
-                
+                    reward += self.nothinking_bonus
+                    print(reward)
 
                 score['score'] = reward
                 if enforce_nothinking:

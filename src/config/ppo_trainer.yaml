@@ -182,8 +182,10 @@ reward_model:
   forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
   reward_manager: naive
   reward_kwargs:
-    nothinking_bonus: 0
+    nothinking_bonus: 0.05
     ref_result_file: null
+    max_response_length: ${data.max_response_length}
+    length_bonus: 0.3
 
 custom_reward_function:
   path: null
