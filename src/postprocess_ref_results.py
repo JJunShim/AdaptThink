@@ -11,7 +11,7 @@ import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="/mnt/zjj/hf/DeepSeek-R1-Distill-Qwen-7B") 
+    parser.add_argument("--model_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") 
     parser.add_argument("--input_path", type=str, default="/mnt/zjj/open-source/github/AdaptThink/adapt_think/data/train/ref_presampling/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_n10_K16_len16384.jsonl")
     parser.add_argument("--output_path", type=str, default="/mnt/zjj/open-source/github/AdaptThink/adapt_think/data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json")
     parser.add_argument("--answer_key", type=str, default="answer")
