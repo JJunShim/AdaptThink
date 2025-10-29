@@ -14,15 +14,18 @@
 """
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
-from .adapt_think_ray_trainer import AdaptThinkRayPPOTrainer
-
 import os
-import ray
+
 import hydra
+import ray
+import torch
+
+from .adapt_think_ray_trainer import AdaptThinkRayPPOTrainer
 
 
 def get_custom_reward_fn(config):
-    import importlib.util, sys
+    import importlib.util
+    import sys
     reward_fn_config = config.get("custom_reward_function") or {}
     file_path = reward_fn_config.get("path")
     if not file_path:
@@ -81,10 +84,12 @@ def run_ppo(config) -> None:
 class TaskRunner:
 
     def run(self, config):
-        from verl.utils.fs import copy_to_local
         # print initial config
         from pprint import pprint
+
         from omegaconf import OmegaConf
+
+        from verl.utils.fs import copy_to_local
         pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
         OmegaConf.resolve(config)
 
@@ -92,7 +97,7 @@ class TaskRunner:
         local_path = copy_to_local(config.actor_rollout_ref.model.path)
 
         # instantiate tokenizer
-        from verl.utils import hf_tokenizer, hf_processor
+        from verl.utils import hf_processor, hf_tokenizer
         trust_remote_code = config.data.get('trust_remote_code', False)
         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
         processor = hf_processor(local_path, use_fast=True)  # used for multimodal LLM, could be none
@@ -101,9 +106,11 @@ class TaskRunner:
         if config.actor_rollout_ref.actor.strategy == 'fsdp':
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
             # from verl.workers.fsdp_workers import ActorRolloutRefWorker, CriticWorker
-            from verl.workers.fsdp_workers import CriticWorker
-            from .adapt_think_fsdp_workers import AdaptThinkActorRolloutRefWorker
             from verl.single_controller.ray import RayWorkerGroup
+            from verl.workers.fsdp_workers import CriticWorker
+
+            from .adapt_think_fsdp_workers import \
+                AdaptThinkActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
 
         else:
@@ -159,6 +166,7 @@ class TaskRunner:
                                        num_examine=1,
                                        compute_score=compute_score,
                                        reward_fn_key=config.data.reward_fn_key,
+                                       eps=torch.finfo(torch.bfloat16).eps,
                                        **reward_kwargs)
 
         # Note that we always use function-based RM for validation

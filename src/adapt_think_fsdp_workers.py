@@ -18,29 +18,32 @@ The main entry point to run the PPO algorithm
 import logging
 import os
 import warnings
-import psutil
 
+import psutil
 import torch
 import torch.distributed
-from torch.distributed.device_mesh import init_device_mesh
-import verl.utils.torch_functional as verl_F
+from codetiming import Timer
 from omegaconf import DictConfig, open_dict
+from torch.distributed.device_mesh import init_device_mesh
+
+import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.single_controller.base import Worker
-from verl.single_controller.base.decorator import register, Dispatch
-from verl.utils import hf_tokenizer, hf_processor
+from verl.single_controller.base.decorator import Dispatch, register
+from verl.utils import hf_processor, hf_tokenizer
+from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.debug import log_gpu_memory_usage
+from verl.utils.flops_counter import FlopsCounter
 from verl.utils.fs import copy_to_local
-from verl.utils.fsdp_utils import get_fsdp_wrap_policy, init_fn, get_init_weight_context_manager
-from verl.utils.fsdp_utils import offload_fsdp_optimizer, offload_fsdp_model_to_cpu, load_fsdp_optimizer, \
-    load_fsdp_model_to_gpu
+from verl.utils.fsdp_utils import (get_fsdp_wrap_policy,
+                                   get_init_weight_context_manager, init_fn,
+                                   load_fsdp_model_to_gpu, load_fsdp_optimizer,
+                                   offload_fsdp_model_to_cpu,
+                                   offload_fsdp_optimizer)
 from verl.utils.import_utils import import_external_libs
 from verl.utils.model import compute_position_id_with_mask
-from verl.utils.flops_counter import FlopsCounter
-from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
-from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
-
-from codetiming import Timer
+from verl.workers.sharding_manager.fsdp_ulysses import \
+    FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
@@ -148,11 +151,16 @@ class AdaptThinkActorRolloutRefWorker(Worker):
                                trust_remote_code=False,
                                use_liger=False,
                                role='actor'):
-        from verl.utils.model import print_model_size, update_model_config, get_generation_config
-        from verl.utils.torch_dtypes import PrecisionType
-        from transformers import AutoModelForCausalLM, AutoConfig, AutoModelForVision2Seq
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision, CPUOffload
         from torch import optim
+        from torch.distributed.fsdp import CPUOffload
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
+        from transformers import (AutoConfig, AutoModelForCausalLM,
+                                  AutoModelForVision2Seq)
+
+        from verl.utils.model import (get_generation_config, print_model_size,
+                                      update_model_config)
+        from verl.utils.torch_dtypes import PrecisionType
 
         assert role in ['actor', 'ref']
 
@@ -203,12 +211,14 @@ class AdaptThinkActorRolloutRefWorker(Worker):
                                                               trust_remote_code=trust_remote_code)
 
             if use_remove_padding or self.ulysses_sequence_parallel_size > 1:
-                from verl.models.transformers.monkey_patch import apply_monkey_patch
+                from verl.models.transformers.monkey_patch import \
+                    apply_monkey_patch
                 apply_monkey_patch(model=actor_module, ulysses_sp_size=self.ulysses_sequence_parallel_size)
 
             # Apply Liger kernel to the model if use_liger is set to True
             if use_liger:
-                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
+                from liger_kernel.transformers.monkey_patch import \
+                    _apply_liger_kernel_to_instance
                 _apply_liger_kernel_to_instance(model=actor_module)
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
@@ -268,7 +278,9 @@ class AdaptThinkActorRolloutRefWorker(Worker):
 
         # TODO: add more optimizer args into config
         if role == 'actor' and optim_config is not None:
-            from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
+            from verl.utils.torch_functional import (
+                get_constant_schedule_with_warmup,
+                get_cosine_schedule_with_warmup)
             actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
                                           lr=optim_config.lr,
                                           betas=optim_config.get('betas', (0.9, 0.999)),
@@ -302,6 +314,7 @@ class AdaptThinkActorRolloutRefWorker(Worker):
 
     def _build_rollout(self, trust_remote_code=False):
         from torch.distributed.device_mesh import init_device_mesh
+
         # TODO(sgm): support FSDP hybrid shard for larger model
         infer_tp = self.config.rollout.tensor_model_parallel_size
         dp = self.world_size // infer_tp
@@ -309,8 +322,9 @@ class AdaptThinkActorRolloutRefWorker(Worker):
         rollout_device_mesh = init_device_mesh('cuda', mesh_shape=(dp, infer_tp), mesh_dim_names=['dp', 'infer_tp'])
         rollout_name = self.config.rollout.name
         if rollout_name == 'vllm':
-            from .adapt_think_vllm_rollout import AdaptThinkvLLMRollout
             from verl.workers.sharding_manager import FSDPVLLMShardingManager
+
+            from .adapt_think_vllm_rollout import AdaptThinkvLLMRollout
             log_gpu_memory_usage(f'Before building {rollout_name} rollout', logger=None)
             local_path = copy_to_local(self.config.model.path)
             rollout = AdaptThinkvLLMRollout(model_path=local_path,
@@ -337,6 +351,7 @@ class AdaptThinkActorRolloutRefWorker(Worker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         from .adapt_think_dp_actor import AdaptThinkDataParallelPPOActor
+
         # This is used to import external_lib into the huggingface systems
         import_external_libs(self.config.model.get('external_lib', None))
 
@@ -376,7 +391,7 @@ class AdaptThinkActorRolloutRefWorker(Worker):
             with open_dict(self.config.actor):
                 self.config.actor.use_remove_padding = use_remove_padding
             self.actor = AdaptThinkDataParallelPPOActor(config=self.config.actor,
-                                              adapt_think_config=self.config.adapt_think,       
+                                              adapt_think_config=self.config.adapt_think,
                                               actor_module=self.actor_module_fsdp,
                                               actor_optimizer=self.actor_optimizer)
 
@@ -514,7 +529,7 @@ class AdaptThinkActorRolloutRefWorker(Worker):
             output = DataProto.from_dict(tensors={'old_log_probs': output},
                                          meta_info={'temperature': self.config.rollout.temperature})
             output = self.ulysses_sharding_manager.postprocess_data(output)
-            
+
         output = output.to('cpu')
 
         # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes

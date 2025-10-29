@@ -16,23 +16,29 @@ FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+import json
+import os
 import uuid
-from pprint import pprint
-from copy import deepcopy
 from collections import defaultdict
-from tqdm import tqdm
+from copy import deepcopy
+from pprint import pprint
+
 import numpy as np
 import torch
-import os
-import json
+from tqdm import tqdm
 
 from verl import DataProto
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer, _timer, apply_kl_penalty, compute_response_mask, AdvantageEstimator
-from verl.trainer.ppo.metric_utils import (compute_data_metrics, compute_throughout_metrics, compute_timing_metrics,
-                                           reduce_metrics)
-from . import adapt_think_core_algos 
 from verl.trainer.ppo import core_algos
+from verl.trainer.ppo.metric_utils import (compute_data_metrics,
+                                           compute_throughout_metrics,
+                                           compute_timing_metrics,
+                                           reduce_metrics)
+from verl.trainer.ppo.ray_trainer import (AdvantageEstimator, RayPPOTrainer,
+                                          _timer, apply_kl_penalty,
+                                          compute_response_mask)
+
+from . import adapt_think_core_algos
 from .adapt_think_metric_utils import process_validation_metrics
 
 
@@ -120,7 +126,7 @@ def compute_adapt_think_metrics(batch):
     metrics['adapt_think/nothinking_reward-thinking_reward/mean'] = metrics['adapt_think/nothinking_reward/mean'] - metrics['adapt_think/thinking_reward/mean']
     print(f'\n\nadapt_think_METRICS\n{metrics}\n\n')
     return metrics
-            
+
 
 class AdaptThinkRayPPOTrainer(RayPPOTrainer):
     """
@@ -134,7 +140,7 @@ class AdaptThinkRayPPOTrainer(RayPPOTrainer):
         super().__init__(config, **kwargs)
         self.config.algorithm.adv_estimator = adv_estimator
         print(f"\n\nADV_ESTIMATOR: {self.config.algorithm.adv_estimator}\n\n")
-    
+
     def _validate(self):
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
@@ -236,7 +242,7 @@ class AdaptThinkRayPPOTrainer(RayPPOTrainer):
 
         if save_dir is None:
             save_dir = f'{self.config.trainer.default_local_dir}/global_step_{self.global_steps}/eval_results_len{self.config.actor_rollout_ref.rollout.val_kwargs.max_tokens}'
-        os.makedirs(f'{save_dir}/data', exist_ok=True)  
+        os.makedirs(f'{save_dir}/data', exist_ok=True)
         data_src2val_results = defaultdict(list)
         for idx, prompt in enumerate(sample_inputs):
             problem = prompt.split('<｜User｜>')[1].split('<｜Assistant｜>')[0].strip()
@@ -264,8 +270,9 @@ class AdaptThinkRayPPOTrainer(RayPPOTrainer):
         The driver process only need to call the compute functions of the worker group through RPC to construct the PPO dataflow.
         The light-weight advantage computation is done on the driver process.
         """
-        from verl.utils.tracking import Tracking
         from omegaconf import OmegaConf
+
+        from verl.utils.tracking import Tracking
 
         logger = Tracking(project_name=self.config.trainer.project_name,
                           experiment_name=self.config.trainer.experiment_name,

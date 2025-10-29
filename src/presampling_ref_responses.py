@@ -1,12 +1,17 @@
-import os, sys, json, jsonlines
-from multiprocessing import Pool
-from functools import partial
-from tqdm import tqdm
-import traceback
-import requests
-from copy import deepcopy
 import argparse
+import json
+import os
 import random
+import sys
+import traceback
+from copy import deepcopy
+from functools import partial
+from multiprocessing import Pool
+
+import jsonlines
+import requests
+from tqdm import tqdm
+
 
 def parse_args():
     parser = argparse.ArgumentParser()

@@ -4,11 +4,12 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 import re
-from pylatexenc import latex2text
-import sympy
-from sympy.parsing import sympy_parser
 from typing import Optional
+
+import sympy
 from math_verify import parse, verify
+from pylatexenc import latex2text
+from sympy.parsing import sympy_parser
 
 # logging.info("DeepscaleR Here!!!")
 
@@ -405,12 +406,12 @@ def last_boxed_only_string(string):
                 right_brace_idx = i
                 break
         i += 1
-    
+
     if right_brace_idx == None:
         retval = None
     else:
         retval = string[idx:right_brace_idx + 1]
-    
+
     return retval
 
 def remove_boxed(s):
@@ -483,7 +484,7 @@ def extract_answer(passage: str) -> str:
     return None
 
 def _get_deepscaler_rule_base_reward(model_answer, label):
-    
+
     if model_answer is None:
         return 0
     # logging.info("extract answer pass!!!")
@@ -497,7 +498,7 @@ def _get_deepscaler_rule_base_reward(model_answer, label):
     else:
         print(f"ERROR GROUND TRUTH: {label}")
         return 0
-        
+
     # Process each ground truth
     processed_ground_truths = []
     for truth in ground_truths:
@@ -508,27 +509,27 @@ def _get_deepscaler_rule_base_reward(model_answer, label):
                 processed_ground_truths.append(processed_truth)
         else:
             processed_ground_truths.append(truth)
-    
+
     if not processed_ground_truths:
         return 0
-    
+
     # Check against all possible correct answers
     for ground_truth in processed_ground_truths:
         is_correct = grade_answer_mathd(model_answer, ground_truth) or grade_answer_sympy(model_answer, ground_truth)
         if is_correct:
             return 1
-            
+
     return 0
-    
+
 def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
-    
+
     Args:
         solution_str: The solution string
         ground_truth: The ground truth answer
         config: Configuration object containing reward model settings
         pause_tokens_index: Indices of pause tokens
-        
+
     Returns:
         Reward score (1.0 for correct, -1.0 for incorrect)
     """
@@ -545,7 +546,7 @@ def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> 
         model_solution = solution_str.split("</think>")[-1]
         pred = extract_answer(model_solution)
         acc = _get_deepscaler_rule_base_reward(pred, ground_truth)
-        
+
         if pred is None:
             pred = "ERROR: Answer Extraction Failed"
             # print(pred)
@@ -558,13 +559,13 @@ def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> 
 
 def nothinking_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
-    
+
     Args:
         solution_str: The solution string
         ground_truth: The ground truth answer
         config: Configuration object containing reward model settings
         pause_tokens_index: Indices of pause tokens
-        
+
     Returns:
         Reward score (1.0 for correct, -1.0 for incorrect)
     """
@@ -580,7 +581,7 @@ def nothinking_rm(data_source, solution_str, ground_truth, extra_info=None) -> f
         model_solution = solution_str.strip()
         pred = extract_answer(model_solution)
         acc = _get_deepscaler_rule_base_reward(pred, ground_truth)
-        
+
         if pred is None:
             pred = "ERROR: Answer Extraction Failed"
 
@@ -592,13 +593,13 @@ def nothinking_rm(data_source, solution_str, ground_truth, extra_info=None) -> f
 
 def multi_choice_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
-    
+
     Args:
         solution_str: The solution string
         ground_truth: The ground truth answer
         config: Configuration object containing reward model settings
         pause_tokens_index: Indices of pause tokens
-        
+
     Returns:
         Reward score (1.0 for correct, -1.0 for incorrect)
     """
@@ -620,26 +621,26 @@ def multi_choice_rm(data_source, solution_str, ground_truth, extra_info=None) ->
         "acc": acc,
         "pred": pred,
     }
-    
+
 def hf_math_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
-    
+
     Args:
         solution_str: The solution string
         ground_truth: The ground truth answer
         config: Configuration object containing reward model settings
         pause_tokens_index: Indices of pause tokens
-        
+
     Returns:
         Reward score (1.0 for correct, -1.0 for incorrect)
     """
 
     model_solution = solution_str.strip()[-500:]
-    
+
     preds = parse(model_solution)
     gold = parse(ground_truth)
     acc = verify(gold, preds)
-    
+
     if preds is None or preds == []:
         pred = "ERROR: Answer Extraction Failed"
         # print(pred)
@@ -652,7 +653,7 @@ def hf_math_rm(data_source, solution_str, ground_truth, extra_info=None) -> floa
         "acc": acc,
         "pred": pred,
     }
-    
+
 if __name__ == "__main__":
     solution = "xxxx"
     print(hf_math_rm('', solution, '1'))

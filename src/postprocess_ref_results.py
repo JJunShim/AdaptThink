@@ -1,21 +1,25 @@
 
-import json, jsonlines
-from tqdm import tqdm
-from adapt_think_rm import adapt_think_rm
-from multiprocessing import Pool
-import os
 import argparse
+import json
+import os
 from collections import defaultdict
-from transformers import AutoTokenizer
+from multiprocessing import Pool
+
+import jsonlines
 import numpy as np
+from tqdm import tqdm
+from transformers import AutoTokenizer
+
+from adapt_think_rm import adapt_think_rm
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") 
+    parser.add_argument("--model_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
     parser.add_argument("--input_path", type=str, default="/mnt/zjj/open-source/github/AdaptThink/adapt_think/data/train/ref_presampling/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_n10_K16_len16384.jsonl")
     parser.add_argument("--output_path", type=str, default="/mnt/zjj/open-source/github/AdaptThink/adapt_think/data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json")
     parser.add_argument("--answer_key", type=str, default="answer")
-    parser.add_argument("--nothinking", action='store_true', default=False)   
+    parser.add_argument("--nothinking", action='store_true', default=False)
     return parser.parse_args()
 
 args = parse_args()
@@ -38,7 +42,7 @@ def process(problem):
     solutions = [(('</think>' if args.nothinking else '') + item['response']['choices'][0]['text']) for item in items]
     lengths = [((args.nothinking == True) + item['response']['usage']['completion_tokens']) for item in items]
     correctness = [adapt_think_rm(data_source='', solution_str=solution, ground_truth=real_answer)['acc'] for solution in solutions]
-    
+
     avg_acc = np.mean(correctness)
     avg_len = np.mean(lengths)
     avg_clip_ratio = np.mean(truncates)
@@ -54,7 +58,7 @@ def process(problem):
             'avg_clip_ratio': avg_clip_ratio,
         }
     }
-    
+
 
 with Pool(64) as p:
     results = list(tqdm(p.imap(process, list(data.keys())), total=len(data)))
@@ -68,5 +72,3 @@ for key, value in overall_metrics.items():
 save_dir = args.output_path.rsplit('/', 1)[0]
 os.makedirs(save_dir, exist_ok=True)
 json.dump(results, open(args.output_path, 'w'), indent=2, ensure_ascii=False)
-    
-

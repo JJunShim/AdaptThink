@@ -12,16 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Tuple, Dict
-import re
-import os
-import torch
 import argparse
-import numpy as np
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForTokenClassification, AutoModelForVision2Seq
+import os
+import re
 from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Tuple
+
+import numpy as np
+import torch
 from safetensors.torch import load_file
-from torch.distributed._tensor import Shard, Placement
+from torch.distributed._tensor import Placement, Shard
+from transformers import (AutoConfig, AutoModelForCausalLM,
+                          AutoModelForTokenClassification,
+                          AutoModelForVision2Seq)
+
 try:
     # for torch 2.5+
     from torch.distributed.tensor import DTensor
@@ -227,7 +231,8 @@ def check_megatron_checkpoint_path(model_path):
 
 
 def convert_megatron_checkpoints_to_hfmodels():
-    from verl.utils.megatron_utils import get_model_checkpoint_path, get_hf_model_checkpoint_path
+    from verl.utils.megatron_utils import (get_hf_model_checkpoint_path,
+                                           get_model_checkpoint_path)
 
     local_path = args.local_dir
 

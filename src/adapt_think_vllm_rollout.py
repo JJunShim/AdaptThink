@@ -25,22 +25,24 @@ When working with Megatron:
 - After inference, all the parameters that doesn't belong to this pp rank is freed.
 """
 import os
-import numpy as np
-from typing import List
 from contextlib import contextmanager
-from omegaconf import DictConfig
+from copy import deepcopy
+from typing import Any, List, Union
+
+import numpy as np
 import torch
 import torch.distributed
+from omegaconf import DictConfig
 from tensordict import TensorDict
 from torch import nn
-from typing import Any, Union
-from verl import DataProto
-from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
-from verl.workers.rollout.base import BaseRollout
-from vllm.distributed import parallel_state as vllm_ps
 from vllm import LLM, SamplingParams
+from vllm.distributed import parallel_state as vllm_ps
+
+from verl import DataProto
 from verl.third_party.vllm import vllm_version
-from copy import deepcopy
+from verl.utils.torch_functional import (get_response_mask,
+                                         pad_2d_list_to_length)
+from verl.workers.rollout.base import BaseRollout
 
 # TODO
 # 1. support pp in vllm
@@ -248,14 +250,14 @@ class AdaptThinkvLLMRollout(BaseRollout):
                         response_ids = output.outputs[sample_id].token_ids
                         response.append(response_ids)
                         enforce_nothinking.append(False)
-                
+
                 response = pad_2d_list_to_length(response, self.pad_token_id,
                                                 max_length=self.config.val_kwargs.max_tokens).to(idx.device)
             else:
                 n_nothinking = round(self.sampling_params.n * self.nothinking_ratio)
                 n_thinking = self.sampling_params.n - n_nothinking
                 print(f"n_nothinking:{n_nothinking}    n_thinking:{n_thinking}")
-                
+
                 if n_nothinking > 0:
                     sampling_params_nothinking = deepcopy(self.sampling_params)
                     sampling_params_nothinking.n = n_nothinking
@@ -270,11 +272,11 @@ class AdaptThinkvLLMRollout(BaseRollout):
                         use_tqdm=False)
                 else:
                     outputs_nothinking = [[]]*len(vllm_inputs)
-                
+
                 if n_thinking > 0:
                     sampling_params_thinking = deepcopy(self.sampling_params)
                     sampling_params_thinking.n = n_thinking
-                    
+
                     # enforce the first token to be "Alright"
                     sampling_params_thinking.max_tokens = sampling_params_thinking.max_tokens - 1
                     vllm_inputs_thinking = deepcopy(vllm_inputs)
@@ -301,7 +303,7 @@ class AdaptThinkvLLMRollout(BaseRollout):
                             enforce_nothinking.append(False)
                             # response.append(output_nothinking.outputs[sample_id].token_ids)
                             response.append([self.non_eot_token_id] + output_nothinking.outputs[sample_id].token_ids)
-                
+
 
                 response = pad_2d_list_to_length(response, self.pad_token_id,
                                                 max_length=self.config.response_length).to(idx.device)

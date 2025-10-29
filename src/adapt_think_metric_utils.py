@@ -1,21 +1,24 @@
-import torch
-from typing import Any, Dict, List, Callable
-import numpy as np
-from verl import DataProto
 from collections import Counter, defaultdict
 from functools import partial
+from typing import Any, Callable, Dict, List
+
+import numpy as np
+import torch
+
+from verl import DataProto
+
 
 def process_validation_metrics(data_sources: list[str],
                                sample_inputs: list[str],
                                infos_dict: dict[str, list[Any]],
                                seed: int = 42) -> dict[str, dict[str, dict[str, float]]]:
     """Process validation metrics into a structured format.
-    
+
     Args:
         data_sources: Array of data source identifiers for each sample
         sample_inputs: List of input prompts
         infos_dict: variable name -> list of values for each sample
-        
+
     Returns:
         dict[str, dict[str, dict[str, float]]]: data source -> variable name -> metric value
     """
@@ -55,5 +58,5 @@ def process_validation_metrics(data_sources: list[str],
         for var_name, metric2prompt_vals in var2metric2prompt_vals.items():
             for metric_name, prompt_vals in metric2prompt_vals.items():
                 data_src2var2metric2val[data_source][var_name][metric_name] = np.mean(prompt_vals)
-    
+
     return data_src2var2metric2val

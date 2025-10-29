@@ -1,8 +1,9 @@
 import argparse
-import os
-from typing import Dict, List, Optional, Any
-import pandas as pd
 import json
+import os
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
 
 
 def make_map_fn(split: str, data_source: str = ""):
@@ -46,7 +47,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_path', default='./data/train/preprocessed_data/deepscaler.parquet')
     parser.add_argument('--repeat', type=int, default=1)
     args = parser.parse_args()
-    
+
     print('-'*50)
     print("Input Path:", args.input_path)
     print("Repeat:", args.repeat)
@@ -54,7 +55,7 @@ if __name__ == '__main__':
     split = args.input_path.split('/')[-2]
     local_dir = args.output_path.rsplit('/', 1)[0]
     os.makedirs(local_dir, exist_ok=True)
-    
+
     dataset = json.load(open(args.input_path, 'r')) * args.repeat
 
     data: List[Dict[str, Any]] = []

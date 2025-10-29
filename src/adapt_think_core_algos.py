@@ -1,9 +1,11 @@
-import numpy as np
-import torch
+import math
 from collections import defaultdict
 
+import numpy as np
+import torch
+
 import verl.utils.torch_functional as verl_F
-import math
+
 
 def compute_naive_outcome_advantage(token_level_rewards: torch.Tensor,
                                    response_mask: torch.Tensor,
@@ -72,7 +74,7 @@ def compute_policy_loss(old_log_prob,
         clip_ratio_c: (float) default: 3.0
             The lower bound of the ratio for dual-clip PPO, See https://arxiv.org/pdf/1912.09729
         loss_agg_mode: (str) choices: "token-mean" / "seq-mean-token-sum" / "seq-mean-token-mean"
-            "token-mean" is the default behavior        
+            "token-mean" is the default behavior
 
     Returns:
         pg_loss: `a scalar torch.Tensor`
@@ -85,7 +87,7 @@ def compute_policy_loss(old_log_prob,
             the fraction of policy gradient loss being clipped when the advantage is negative
     """
     assert clip_ratio_c > 1.0, f"The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0, but get the value: {clip_ratio_c}."
-    
+
     if adapt_think_adjust_old_log_prob:
         # print(f"\n\nOLD LOG PROBS\n{old_log_prob[:, 0].exp()}")
         old_log_prob[enforce_nothinking, 0] = math.log(nothinking_ratio) if nothinking_ratio > 0 else -1e9
@@ -96,7 +98,7 @@ def compute_policy_loss(old_log_prob,
         negative_approx_kl = log_prob - old_log_prob
         ratio = torch.exp(negative_approx_kl)
         advantages = advantages[:, 0]
-        
+
         pg_losses1 = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1 - cliprange_low,
                                             1 + cliprange_high)  # - clip(ratio, 1-cliprange, 1+cliprange) * A
