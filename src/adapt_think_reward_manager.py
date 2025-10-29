@@ -12,15 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sympy import primenu
-from verl import DataProto
-from .adapt_think_rm import adapt_think_rm
-import torch
-from collections import defaultdict
-import numpy as np
 import json
 import math
+from collections import defaultdict
+
+import numpy as np
+import torch
+from sympy import primenu
 from tqdm import tqdm
+
+from verl import DataProto
+
+from .adapt_think_rm import adapt_think_rm
+
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
@@ -29,14 +33,15 @@ class AdaptThinkRewardManager:
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key='data_source', is_training=True, nothinking_bonus=0, ref_result_file=None, max_response_length=512, length_bonus=0) -> None:
+    def __init__(self, tokenizer, num_examine, compute_score=None, reward_fn_key='data_source', is_training=True,  ref_result_file=None, eps=1e-6, max_response_length=512, nothinking_bonus=0, length_bonus=0) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or adapt_think_rm
         self.reward_fn_key = reward_fn_key
         self.is_training = is_training
-        self.nothinking_bonus = nothinking_bonus
+        self.eps = eps
         self.max_response_length = max_response_length
+        self.nothinking_bonus = nothinking_bonus
         self.length_bonus = length_bonus
         if ref_result_file:
             self.problem2ref_metrics = {js['problem'].strip(): js['metrics'] for js in tqdm(json.load(open(ref_result_file, 'r')), desc='LOADING REF METRICS')}
@@ -191,13 +196,12 @@ class AdaptThinkRewardManager:
 
                 reward = acc - ref_mean_acc_thinking
                 if acc:
-                    efficiency = math.log(response_len / self.max_response_length)
-                    efficiency *= self.length_bonus
-                    reward -= efficiency
-                    print(reward, efficiency)
-                if enforce_nothinking:
-                    reward += self.nothinking_bonus
-                    print(reward)
+                    if enforce_nothinking:
+                        reward += self.nothinking_bonus
+                    else:
+                        efficiency = math.log(response_len / self.max_response_length + self.eps)
+                        efficiency *= self.length_bonus
+                        reward -= efficiency
 
                 score['score'] = reward
                 if enforce_nothinking:
