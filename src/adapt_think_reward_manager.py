@@ -192,14 +192,15 @@ class AdaptThinkRewardManager:
                 mean_len_thinking, std_len_thinking = id2mean_len['thinking'][uid], id2std_len['thinking'][uid]
 
                 ref_metrics = uid2ref_metrics[uid]
-                ref_mean_acc_thinking = ref_metrics['avg_acc_thinking']
+                ref_mean_acc = ref_metrics['avg_acc_thinking']
+                ref_mean_len = ref_metrics['avg_len_thinking']
 
-                reward = acc - ref_mean_acc_thinking
+                reward = acc - ref_mean_acc
                 if acc:
                     if enforce_nothinking:
                         reward += self.nothinking_bonus
                     else:
-                        efficiency = max(self.eps, min(response_len / self.max_response_length, 1))
+                        efficiency = max(self.eps, min(response_len / ref_mean_len, 2))
                         efficiency = math.log(1 + efficiency)
                         efficiency *= self.length_bonus
                         reward -= efficiency
