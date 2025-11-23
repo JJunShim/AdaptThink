@@ -219,3 +219,4 @@ __marimo__/
 outputs/
 results/
 wandb/
+ckpts/
