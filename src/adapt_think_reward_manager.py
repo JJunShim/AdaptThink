@@ -199,9 +199,9 @@ class AdaptThinkRewardManager:
                 if acc:
                     if enforce_nothinking:
                         reward += self.nothinking_bonus
-                    else:
-                        efficiency = max(self.eps, min(response_len / ref_mean_len, 2))
-                        efficiency = math.log(1 + efficiency)
+                    elif ref_mean_acc >= 0.6:
+                        efficiency = max(0.1, min(response_len / ref_mean_len, 1))
+                        efficiency = math.log(efficiency)
                         efficiency *= self.length_bonus
                         reward -= efficiency
 
