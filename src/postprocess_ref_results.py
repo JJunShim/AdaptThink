@@ -44,12 +44,10 @@ def process(id):
 
     for item in items:
         response = item.get("response")
-        choice = response.get("choices")[0]
-        usage = response.get("usage")
 
-        solutions.append(prefix + choice.get("text"))
-        lengths.append(usage.get("completion_tokens") + token_adjustment)
-        truncates.append(choice.get("finish_reason") == "length")
+        solutions.append(prefix + response.get("text"))
+        lengths.append(response.get("tokens") + token_adjustment)
+        truncates.append(response.get("finish_reason") == "length")
 
     # 정확도 계산
     correctness = [
@@ -82,7 +80,7 @@ if __name__ == "__main__":
         for line in tqdm(f):
             item = orjson.loads(line)
             problem = item.get("problem").strip()
-            key = hashlib.md5(problem.encode()).hexdigest()
+            key = item.get("problem_idx")
             data[key].append(item)
 
     print(f"총 문제 수: {len(data)}")
