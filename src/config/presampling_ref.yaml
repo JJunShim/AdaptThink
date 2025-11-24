@@ -1,35 +1,30 @@
-# config.yaml
 model:
   name: "Qwen/Qwen3-4B-Thinking-2507"
-  max_tokens: 262144
+  max_tokens: 16384
   trust_remote_code: true
   gpu_memory_utilization: 0.9
 
 parallel:
-  dp_size: 1
+  dp_size: 2
   tp_size: 1
   node_size: 1
   node_rank: 0
-  timeout: 3600
 
 data:
   dataset_path: "./data/train/deepscaler.json"
-  num_samples: 0  # 0 for all
+  num_samples: 2  # 0 for all
   K: 8
 
 sampling:
-  temperature: 0.6
+  temperature: 0.7
   top_p: 0.95
   seed_offset: 42
 
 prompt:
   nothinking: false
-  # think: '<｜begin▁of▁sentence｜><｜User｜>{question}<｜Assistant｜><think>'
-  # nothink: '<｜begin▁of▁sentence｜><｜User｜>{question}<｜Assistant｜><think>\n</think>'
-  # thinking: '<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>'
-  # nothinking: '<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n</think>'
   think: "<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>"
+  nothink: "<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n</think>"
 
 output:
-  output_dir: "./data/train/ref_presampling"
+  output_dir: "./data/train"
   save_intermediate: false  # Keep or delete rank files
