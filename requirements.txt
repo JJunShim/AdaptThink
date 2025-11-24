@@ -21,3 +21,4 @@ vllm
 wandb
 jsonlines
 math_verify
+omegaconf
