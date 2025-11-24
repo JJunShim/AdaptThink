@@ -220,3 +220,4 @@ outputs/
 results/
 wandb/
 ckpts/
+data/

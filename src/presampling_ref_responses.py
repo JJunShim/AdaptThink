@@ -1,525 +1,349 @@
 import json
 import logging
+import math
 import os
-from dataclasses import dataclass, field
 from multiprocessing import Process
 from pathlib import Path
-from time import sleep
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import jsonlines
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from vllm import LLM, SamplingParams
 from vllm.utils import get_open_port
 
+# 사용자 설정 (가정)
+from src.config.presampling_ref import Config
 
-# 로거 설정
-def setup_logger(name: str, rank: int = None) -> logging.Logger:
-    """로거 설정"""
+# --- Type Hints ---
+RankData = List[Dict[str, Any]]
+PromptData = Tuple[List[str], List[Dict[str, Any]]]
+
+
+def setup_logger(name: str, rank: Optional[int] = None) -> logging.Logger:
+    """로거 설정 (공통 유틸)"""
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
-
-    # 핸들러가 이미 있으면 제거 (중복 방지)
     if logger.handlers:
         logger.handlers.clear()
 
-    # 포맷터 설정
-    rank_str = f"[Rank {rank}] " if rank is not None else ""
+    rank_prefix = f"[Rank {rank}] " if rank is not None else "[Master] "
     formatter = logging.Formatter(
-        f'%(asctime)s - {rank_str}%(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        f"%(asctime)s - {rank_prefix}%(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-
-    # 콘솔 핸들러
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
     return logger
 
 
-@dataclass
-class ModelConfig:
-    """모델 관련 설정"""
-    name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-    max_tokens: int = 16384
-    trust_remote_code: bool = True
-    gpu_memory_utilization: float = 0.9
+class PathManager:
+    """경로 및 파일명 관리"""
 
-
-@dataclass
-class ParallelConfig:
-    """병렬 처리 설정"""
-    dp_size: int = 2  # Data parallel size
-    tp_size: int = 1  # Tensor parallel size
-    node_size: int = 1  # Total number of nodes
-    node_rank: int = 0  # Rank of current node
-    master_addr: str = ""  # Master node IP
-    master_port: int = 0  # Master node port
-    timeout: int = 3600  # Timeout in seconds
-
-
-@dataclass
-class DataConfig:
-    """데이터 관련 설정"""
-    dataset_path: str = "./data/train/deepscaler.json"
-    num_samples: int = 10  # 0 for all data
-    K: int = 16  # Samples per problem
-
-
-@dataclass
-class SamplingConfig:
-    """샘플링 파라미터 설정"""
-    temperature: float = 0.6
-    top_p: float = 0.95
-    seed_offset: int = 42  # Base seed, will add rank
-
-
-@dataclass
-class PromptConfig:
-    """프롬프트 관련 설정"""
-    nothinking: bool = False
-
-    think: str = '<｜begin▁of▁sentence｜><｜User｜>{question}<｜Assistant｜><think>\n'
-    nothink: str = '<｜begin▁of▁sentence｜><｜User｜>{question}<｜Assistant｜><think>\n</think>'
-
-
-@dataclass
-class OutputConfig:
-    """출력 관련 설정"""
-    output_dir: str = "./data/train/ref_presampling"
-    save_intermediate: bool = True  # Save intermediate rank results
-
-
-@dataclass
-class Config:
-    """전체 설정"""
-    config: str = field()
-    model: ModelConfig = field(default_factory=ModelConfig)
-    parallel: ParallelConfig = field(default_factory=ParallelConfig)
-    data: DataConfig = field(default_factory=DataConfig)
-    sampling: SamplingConfig = field(default_factory=SamplingConfig)
-    prompt: PromptConfig = field(default_factory=PromptConfig)
-    output: OutputConfig = field(default_factory=OutputConfig)
-
-
-class ConfigManager:
-    """설정 관리 클래스"""
-
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: Config):
         self.config = config
-        self.logger = setup_logger("ConfigManager")
+        self.output_dir = Path(config.output.output_dir)
+        self.dataset_name = Path(config.data.dataset_path).stem
+        self.model_short = config.model.name.split("/")[-1]
 
-    def get_output_path(self) -> Path:
-        """최종 출력 파일 경로"""
-        dataset = Path(self.config.data.dataset_path).stem
-        model_short = self.config.model.name.split('/')[-1]
-        suffix = '_nothinking' if self.config.prompt.nothinking else ''
-
+    @property
+    def final_output_path(self) -> Path:
+        suffix = "_nothinking" if self.config.prompt.nothinking else ""
         filename = (
-            f"{model_short}_{dataset}_"
+            f"{self.model_short}_{self.dataset_name}_"
             f"n{self.config.data.num_samples}_"
             f"K{self.config.data.K}_"
             f"len{self.config.model.max_tokens}{suffix}.jsonl"
         )
-
-        output_dir = Path(self.config.output.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir / filename
+        return self.output_dir / filename
 
     def get_rank_output_path(self, rank: int) -> Path:
-        """각 rank별 임시 출력 경로"""
-        output_path = self.get_output_path()
-        rank_filename = output_path.stem + f"_rank{rank}" + output_path.suffix
-        return output_path.parent / rank_filename
+        final = self.final_output_path
+        return final.parent / f"{final.stem}_rank{rank}{final.suffix}"
 
-    def get_prompt_template(self) -> str:
-        """프롬프트 템플릿 반환"""
-
-        if self.config.prompt.nothinking:
-            return self.config.prompt.nothink
-        else:
-            return self.config.prompt.think
+    def ensure_dir(self):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
 
-    def log_config(self):
-        """설정 정보 로깅"""
-        self.logger.info("="*60)
-        self.logger.info("Configuration:")
-        self.logger.info("="*60)
-        self.logger.info(f"Model: {self.config.model.name}")
-        self.logger.info(f"Dataset: {self.config.data.dataset_path}")
-        self.logger.info(f"Num samples: {self.config.data.num_samples}")
-        self.logger.info(f"K (samples per problem): {self.config.data.K}")
-        self.logger.info(f"Data Parallel size: {self.config.parallel.dp_size}")
-        self.logger.info(
-            f"Tensor Parallel size: {self.config.parallel.tp_size}")
-        self.logger.info(f"Max tokens: {self.config.model.max_tokens}")
-        self.logger.info(
-            f"GPU memory utilization: {self.config.model.gpu_memory_utilization}")
-        self.logger.info(f"Temperature: {self.config.sampling.temperature}")
-        self.logger.info(f"Top-p: {self.config.sampling.top_p}")
-        self.logger.info(f"No thinking: {self.config.prompt.nothinking}")
-        self.logger.info(f"Output: {self.get_output_path()}")
-        self.logger.info("="*60)
+class DataManager:
+    """
+    데이터 로딩, 전처리, 프롬프트 변환을 담당하는 클래스
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.logger = logging.getLogger("DataManager")
+
+    def load_and_shard(self) -> List[Tuple[RankData, int]]:
+        """
+        데이터를 로드하고 DP 사이즈에 맞춰 분할(Shard)하여 반환
+        Return: [(chunk_data, start_index), ...]
+        """
+        self.logger.info(f"Loading dataset: {self.config.data.dataset_path}")
+
+        with open(self.config.data.dataset_path, "r") as f:
+            data = json.load(f)
+
+        if self.config.data.num_samples > 0:
+            data = data[: self.config.data.num_samples]
+
+        total_items = len(data)
+        dp_size = self.config.parallel.dp_size
+        chunk_size = math.ceil(total_items / dp_size)
+
+        shards = []
+        for i in range(dp_size):
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, total_items)
+
+            if start_idx >= total_items:
+                chunk = []
+            else:
+                chunk = data[start_idx:end_idx]
+
+            shards.append((chunk, start_idx))
+
+        self.logger.info(f"Loaded {total_items} items, split into {dp_size} shards.")
+        return shards
+
+    @staticmethod
+    def chunk_to_prompts(chunk: RankData, start_idx: int, config: Config) -> PromptData:
+        """
+        Raw 데이터 청크를 vLLM 입력용 프롬프트와 메타데이터로 변환
+        (Worker 프로세스에서 호출됨 -> staticmethod 권장)
+        """
+        prompts = []
+        metadata = []
+
+        # 템플릿 선택
+        template = (
+            config.prompt.nothink if config.prompt.nothinking else config.prompt.think
+        )
+        K = config.data.K
+
+        for i, item in enumerate(chunk):
+            real_idx = start_idx + i
+            prompt_text = template.format(question=item["problem"])
+
+            # K번 샘플링을 위해 복제
+            for j in range(K):
+                prompts.append(prompt_text)
+                metadata.append(
+                    {
+                        "_id": f"{real_idx}_{j}",
+                        "problem_idx": real_idx,
+                        "sample_idx": j,
+                        "original": item,
+                    }
+                )
+
+        return prompts, metadata
 
 
-def format_prompt(question: str, template: str) -> str:
-    """프롬프트 포맷팅"""
-    return template.format(question=question)
+def worker_logic(
+    rank: int,
+    local_rank: int,
+    shard_data: Tuple[RankData, int],  # (data, start_idx)
+    config: Config,
+    master_addr: str,
+    master_port: int,
+):
+    """
+    개별 GPU 워커 프로세스 로직
+    """
+    logger = setup_logger(f"Worker-{rank}", rank=rank)
+    paths = PathManager(config)
 
+    chunk, start_idx = shard_data
 
-def prepare_prompts_and_metadata(
-    data: List[Dict],
-    config_manager: ConfigManager
-) -> tuple:
-    """프롬프트와 메타데이터 준비"""
-    logger = logging.getLogger("PrepareData")
+    # 1. 환경변수 설정
+    os.environ.update(
+        {
+            "VLLM_DP_RANK": str(rank),
+            "VLLM_DP_RANK_LOCAL": str(local_rank),
+            "VLLM_DP_SIZE": str(config.parallel.dp_size),
+            "VLLM_DP_MASTER_IP": master_addr,
+            "VLLM_DP_MASTER_PORT": str(master_port),
+        }
+    )
 
-    prompts = []
-    metadata = []
-    template = config_manager.get_prompt_template()
+    try:
+        if not chunk:
+            logger.warning("Empty chunk received. Exiting.")
+            paths.get_rank_output_path(rank).touch()  # 빈 파일 생성
+            return
 
-    for i, js in enumerate(data):
-        prompt = format_prompt(js['problem'], template)
+        # 2. 프롬프트 생성 (DataManager의 정적 메서드 사용)
+        prompts, metadata = DataManager.chunk_to_prompts(chunk, start_idx, config)
+        logger.info(f"Prepared {len(prompts)} prompts.")
 
-        # 각 문제에 대해 K개의 샘플 생성
-        for j in range(config_manager.config.data.K):
-            prompts.append(prompt)
-            metadata.append({
-                '_id': f'{i}_{j}',
-                'problem_idx': i,
-                'sample_idx': j,
-                'original': js
-            })
-
-    logger.info(f"Prepared {len(prompts)} prompts from {len(data)} problems")
-    return prompts, metadata
-
-
-def distribute_work(
-    prompts: List,
-    metadata: List,
-    dp_size: int,
-    global_dp_rank: int
-) -> tuple:
-    """각 DP rank에 작업 분배"""
-    logger = logging.getLogger("DistributeWork")
-
-    total_tasks = len(prompts)
-    floor = total_tasks // dp_size
-    remainder = total_tasks % dp_size
-
-    def start(rank):
-        return rank * floor + min(rank, remainder)
-
-    start_idx = start(global_dp_rank)
-    end_idx = start(global_dp_rank + 1)
-
-    rank_prompts = prompts[start_idx:end_idx]
-    rank_metadata = metadata[start_idx:end_idx]
-
-    # 빈 경우 placeholder 추가
-    if len(rank_prompts) == 0:
-        rank_prompts = ["Placeholder"]
-        rank_metadata = [{'_id': 'placeholder', 'is_placeholder': True}]
-        logger.warning(f"Rank {global_dp_rank} has no work, using placeholder")
-    else:
-        logger.info(
-            f"Rank {global_dp_rank}: assigned {len(rank_prompts)} tasks "
-            f"(indices {start_idx}-{end_idx-1})"
+        # 3. LLM 로드
+        llm = LLM(
+            model=config.model.name,
+            tensor_parallel_size=config.parallel.tp_size,
+            gpu_memory_utilization=config.model.gpu_memory_utilization,
+            max_model_len=config.model.max_tokens,
+            trust_remote_code=config.model.trust_remote_code,
+            seed=config.sampling.seed_offset + rank,
         )
 
-    return rank_prompts, rank_metadata
+        sampling_params = SamplingParams(
+            temperature=config.sampling.temperature,
+            top_p=config.sampling.top_p,
+            max_tokens=config.model.max_tokens,
+        )
+
+        # 4. 추론 실행
+        logger.info("Running inference...")
+        outputs = llm.generate(prompts, sampling_params)
+
+        # 5. 결과 정리
+        results = []
+        for meta, output in zip(metadata, outputs):
+            o = output.outputs[0]
+            res = meta["original"].copy()
+            res.update(
+                {
+                    "_id": meta["_id"],
+                    "problem_idx": meta["problem_idx"],
+                    "sample_idx": meta["sample_idx"],
+                    "dp_rank": rank,
+                    "response": o.text,
+                    "tokens": len(o.token_ids)
+                }
+            )
+            results.append(res)
+
+        # 6. 저장
+        out_path = paths.get_rank_output_path(rank)
+        with jsonlines.open(out_path, "w") as writer:
+            writer.write_all(results)
+
+        logger.info(f"Saved {len(results)} items to {out_path}")
+
+    except Exception as e:
+        logger.error(f"Inference failed: {e}", exc_info=True)
+        raise e
 
 
-def save_results(results: List[Dict], output_path: Path, logger: logging.Logger):
-    """결과 저장"""
-    with jsonlines.open(output_path, 'w') as writer:
-        count = 0
-        for result in results:
-            if not result.get('is_placeholder', False):
-                writer.write(result)
-                count += 1
-    logger.info(f"Saved {count} results to {output_path}")
+class InferenceRunner:
+    """
+    전체 프로세스 관리 및 실행 (Orchestrator)
+    """
 
+    def __init__(self, config: Config, data_manager: DataManager):
+        self.config = config
+        self.data_manager = data_manager
+        self.paths = PathManager(config)
+        self.logger = setup_logger("Runner")
 
-def worker_process(
-    config_dict: dict,
-    data: List[Dict],
-    dp_size: int,
-    local_dp_rank: int,
-    global_dp_rank: int,
-    dp_master_ip: str,
-    dp_master_port: int,
-    tp_size: int,
-):
-    """각 DP rank에서 실행되는 워커 프로세스"""
+        self.paths.ensure_dir()
 
-    # 로거 설정
-    logger = setup_logger("Worker", rank=global_dp_rank)
+    def run(self):
+        self._print_config()
 
-    # Config 재구성
-    config = OmegaConf.create(config_dict)
-    config_manager = ConfigManager(config)
+        # 1. 데이터 준비
+        shards = self.data_manager.load_and_shard()
 
-    # 환경 변수 설정
-    os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
-    os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
-    os.environ["VLLM_DP_SIZE"] = str(dp_size)
-    os.environ["VLLM_DP_MASTER_IP"] = dp_master_ip
-    os.environ["VLLM_DP_MASTER_PORT"] = str(dp_master_port)
-
-    logger.info(f"Starting worker process (Local rank: {local_dp_rank})")
-
-    # 프롬프트와 메타데이터 준비
-    all_prompts, all_metadata = prepare_prompts_and_metadata(
-        data, config_manager)
-
-    # 이 rank의 작업 분배
-    prompts, metadata = distribute_work(
-        all_prompts, all_metadata, dp_size, global_dp_rank
-    )
-
-    logger.info(f"Processing {len(prompts)} prompts")
-
-    # Sampling params
-    sampling_params = SamplingParams(
-        temperature=config.sampling.temperature,
-        top_p=config.sampling.top_p,
-        max_tokens=config.model.max_tokens,
-        seed=config.sampling.seed_offset + global_dp_rank,
-    )
-
-    logger.info(
-        f"Sampling params: temp={config.sampling.temperature}, "
-        f"top_p={config.sampling.top_p}, "
-        f"seed={config.sampling.seed_offset + global_dp_rank}"
-    )
-
-    # LLM 초기화
-    logger.info("Initializing LLM engine...")
-    llm = LLM(
-        model=config.model.name,
-        tensor_parallel_size=tp_size,
-        gpu_memory_utilization=config.model.gpu_memory_utilization,
-        max_model_len=config.model.max_tokens,
-        trust_remote_code=config.model.trust_remote_code,
-    )
-    logger.info("LLM engine initialized successfully")
-
-    # 추론 실행
-    logger.info("Starting inference...")
-    outputs = llm.generate(prompts, sampling_params)
-    logger.info("Inference completed")
-
-    # 결과 구성
-    results = []
-    for meta, output in zip(metadata, outputs):
-        if meta.get('is_placeholder', False):
-            continue
-
-        result = meta['original'].copy()
-        result['_id'] = meta['_id']
-        result['problem_idx'] = meta['problem_idx']
-        result['sample_idx'] = meta['sample_idx']
-        result['dp_rank'] = global_dp_rank
-        result['response'] = {
-            'text': output.outputs[0].text,
-            'tokens': len(output.outputs[0].token_ids),
-            'finish_reason': output.outputs[0].finish_reason,
-        }
-        results.append(result)
-
-    # 결과 저장
-    rank_output_path = config_manager.get_rank_output_path(global_dp_rank)
-    save_results(results, rank_output_path, logger)
-
-    # 샘플 로깅
-    logger.info(f"Sample outputs (showing first 3):")
-    for i, result in enumerate(results[:3]):
-        logger.info(
-            f"  [{i+1}] Problem: {result.get('problem', 'N/A')[:80]}...")
-        logger.info(f"      Response: {result['response']['text'][:80]}...")
-
-    logger.info(f"Worker process completed successfully")
-    sleep(1)
-
-
-def merge_results(
-    config_manager: ConfigManager,
-    dp_size: int,
-    logger: logging.Logger
-):
-    """모든 rank의 결과를 하나로 병합"""
-    logger.info("Merging results from all ranks...")
-
-    all_results = []
-    for rank in range(dp_size):
-        rank_output_path = config_manager.get_rank_output_path(rank)
-        if rank_output_path.exists():
-            with jsonlines.open(rank_output_path, 'r') as reader:
-                rank_results = list(reader)
-                all_results.extend(rank_results)
-                logger.info(
-                    f"Loaded {len(rank_results)} results from rank {rank}")
-
-            # 임시 파일 삭제
-            if config_manager.config.output.save_intermediate:
-                logger.info(f"Keeping intermediate file: {rank_output_path}")
-            else:
-                rank_output_path.unlink()
-                logger.info(f"Deleted intermediate file: {rank_output_path}")
+        # 2. 통신 설정
+        master_ip = self.config.parallel.master_addr
+        if self.config.parallel.node_size == 1:
+            master_ip = "127.0.0.1"
+            master_port = get_open_port()
         else:
-            logger.warning(f"No output file found for rank {rank}")
+            master_port = self.config.parallel.master_port
 
-    # 결과를 _id 순으로 정렬
-    all_results.sort(key=lambda x: (x['problem_idx'], x['sample_idx']))
+        self.logger.info(f"Master Address: {master_ip}:{master_port}")
 
-    # 최종 파일에 저장
-    output_path = config_manager.get_output_path()
-    with jsonlines.open(output_path, 'w') as writer:
-        for result in all_results:
-            writer.write(result)
+        # 3. 워커 프로세스 실행
+        processes = []
+        dp_per_node = self.config.parallel.dp_size // self.config.parallel.node_size
+        node_rank = self.config.parallel.node_rank
+        start_global_rank = node_rank * dp_per_node
 
-    logger.info(f"Merged {len(all_results)} total results to {output_path}")
+        for local_rank in range(dp_per_node):
+            global_rank = start_global_rank + local_rank
 
+            p = Process(
+                target=worker_logic,
+                kwargs={
+                    "rank": global_rank,
+                    "local_rank": local_rank,
+                    "shard_data": shards[global_rank],
+                    "config": self.config,
+                    "master_addr": master_ip,
+                    "master_port": master_port,
+                },
+            )
+            p.start()
+            processes.append(p)
+            self.logger.info(f"Started worker {global_rank} (PID: {p.pid})")
 
-def load_data(config: DictConfig, logger: logging.Logger) -> List[Dict]:
-    """데이터 로드 및 샘플링"""
-    logger.info(f"Loading data from {config.data.dataset_path}")
+        # 4. 대기 및 에러 체크
+        failed = False
+        for p in processes:
+            p.join()
+            if p.exitcode != 0:
+                self.logger.error(f"Worker {p.pid} failed with exit code {p.exitcode}")
+                failed = True
 
-    with open(config.data.dataset_path, 'r') as f:
-        data = json.load(f)
+        if failed:
+            self.logger.error("Aborting due to worker failures.")
+            exit(1)
 
-    logger.info(f"Loaded {len(data)} problems")
+        # 5. 결과 병합
+        self._merge_results()
 
-    if config.data.num_samples > 0:
-        data = data[:config.data.num_samples]
-        logger.info(
-            f"Using {len(data)} problems (num_samples={config.data.num_samples})")
-    else:
-        logger.info(f"Using all {len(data)} problems")
+    def _merge_results(self):
+        self.logger.info("Merging results from all ranks...")
+        merged_data = []
 
-    total_inferences = len(data) * config.data.K
-    logger.info(f"Total inferences to perform: {total_inferences}")
+        for rank in range(self.config.parallel.dp_size):
+            p = self.paths.get_rank_output_path(rank)
+            if p.exists():
+                with jsonlines.open(p, "r") as reader:
+                    merged_data.extend(list(reader))
 
-    return data
+                if not self.config.output.save_intermediate:
+                    p.unlink()
+
+        # 정렬
+        merged_data.sort(key=lambda x: (x["problem_idx"], x["sample_idx"]))
+
+        final_path = self.paths.final_output_path
+        with jsonlines.open(final_path, "w") as writer:
+            writer.write_all(merged_data)
+
+        self.logger.info(
+            f"Done. Final output: {final_path} ({len(merged_data)} samples)"
+        )
+
+    def _print_config(self):
+        self.logger.info("=" * 40)
+        self.logger.info(f"Model: {self.config.model.name}")
+        self.logger.info(f"DP Size: {self.config.parallel.dp_size}")
+        self.logger.info(
+            f"Samples: {self.config.data.num_samples} * {self.config.data.K}"
+        )
+        self.logger.info("=" * 40)
 
 
 def main():
-    # 메인 로거 설정
-    logger = setup_logger("Main")
-
-    # CLI 인자 파싱
+    # 설정 로드
     cli_conf = OmegaConf.from_cli()
+    base_conf = OmegaConf.structured(Config)
 
-    # YAML 설정 로드 (존재하는 경우)
-    if cli_conf.get('config'):
-        yaml_conf = OmegaConf.load(cli_conf.config)
-        logger.info(f"Loaded config from {cli_conf.config}")
+    if cli_conf.get("config"):
+        file_conf = OmegaConf.load(cli_conf.config)
+        config = OmegaConf.merge(base_conf, file_conf, cli_conf)
     else:
-        yaml_conf = OmegaConf.create()
+        config = OmegaConf.merge(base_conf, cli_conf)
 
-    # 기본 설정
-    default_conf = OmegaConf.structured(Config)
+    # 객체 주입 (Dependency Injection)
+    data_manager = DataManager(config)
+    runner = InferenceRunner(config, data_manager)
 
-    # 병합: default < yaml < cli
-    config = OmegaConf.merge(default_conf, yaml_conf, cli_conf)
-
-    # ConfigManager 생성
-    config_manager = ConfigManager(config)
-    config_manager.log_config()
-
-    # 데이터 로드
-    data = load_data(config, logger)
-
-    # DP master 설정
-    if config.parallel.node_size == 1:
-        dp_master_ip = "127.0.0.1"
-        dp_master_port = get_open_port()
-    else:
-        dp_master_ip = config.parallel.master_addr
-        dp_master_port = config.parallel.master_port
-
-    logger.info(f"DP Master: {dp_master_ip}:{dp_master_port}")
-
-    # Config를 dict로 변환 (multiprocessing을 위해)
-    config_dict = OmegaConf.to_container(config, resolve=True)
-
-    # 각 DP rank를 위한 프로세스 시작
-    logger.info(f"Starting {config.parallel.dp_size} worker processes...")
-    procs = []
-
-    dp_per_node = config.parallel.dp_size // config.parallel.node_size
-    start_rank = config.parallel.node_rank * dp_per_node
-    end_rank = (config.parallel.node_rank + 1) * dp_per_node
-
-    for local_dp_rank, global_dp_rank in enumerate(range(start_rank, end_rank)):
-        proc = Process(
-            target=worker_process,
-            args=(
-                config_dict,
-                data,
-                config.parallel.dp_size,
-                local_dp_rank,
-                global_dp_rank,
-                dp_master_ip,
-                dp_master_port,
-                config.parallel.tp_size,
-            ),
-        )
-        proc.start()
-        procs.append(proc)
-        logger.info(
-            f"Started process for rank {global_dp_rank} (PID: {proc.pid})")
-
-    # 모든 프로세스 완료 대기
-    logger.info("Waiting for all processes to complete...")
-    exit_code = 0
-    for i, proc in enumerate(procs):
-        # proc.join(timeout=config.parallel.timeout)
-        proc.join()
-        if proc.exitcode is None:
-            logger.error(
-                f"Process {proc.pid} (rank {start_rank + i}) "
-                f"didn't stop within {config.parallel.timeout}s timeout. Killing..."
-            )
-            proc.kill()
-            exit_code = 1
-        elif proc.exitcode != 0:
-            logger.error(
-                f"Process {proc.pid} (rank {start_rank + i}) exited with code {proc.exitcode}")
-            exit_code = proc.exitcode
-        else:
-            logger.info(
-                f"Process {proc.pid} (rank {start_rank + i}) completed successfully")
-
-    if exit_code == 0:
-        # 결과 병합
-        merge_results(config_manager, config.parallel.dp_size, logger)
-
-        # 통계 출력
-        output_path = config_manager.get_output_path()
-        with jsonlines.open(output_path, 'r') as reader:
-            results = list(reader)
-
-        problems_processed = len(set(r['problem_idx'] for r in results))
-        avg_samples = len(results) / \
-            problems_processed if problems_processed > 0 else 0
-
-        logger.info("="*60)
-        logger.info("Final Statistics:")
-        logger.info("="*60)
-        logger.info(f"Problems processed: {problems_processed}")
-        logger.info(f"Total samples: {len(results)}")
-        logger.info(f"Average samples per problem: {avg_samples:.2f}")
-        logger.info("="*60)
-        logger.info("Inference completed successfully!")
-    else:
-        logger.error(f"Inference failed with exit code {exit_code}")
-
-    exit(exit_code)
+    runner.run()
 
 
 if __name__ == "__main__":
