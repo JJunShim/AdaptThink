@@ -9,17 +9,17 @@ val_files="['./data/test/preprocessed_data/gsm8k.parquet','./data/test/preproces
 batch_size=128
 n_rollout=16
 max_response_length=16384
-LR=1e-6
+LR=3e-6
 
 nothinking_ratio=0.5
 nothinking_max_response_length=4096
 end_of_think_token_id=151649 # </think>
 non_end_of_think_token_id=71486 # "Alright"
-nothinking_bonus=0.1
-length_bonus=0.01
+nothinking_bonus=0.05
+length_bonus=0.1
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json"
-reward_func=2.6
+reward_func=2.7
 
 PROJECT_NAME="adaptive_reasoning"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # path to your download HF model
@@ -30,8 +30,9 @@ CKPT_DIR="./ckpts/${PROJECT_NAME}/${EXP_NAME}"
 python3 -m src.main_ppo \
     algorithm.adv_estimator=naive \
     reward_model.reward_manager=adapt_think \
-    reward_model.reward_kwargs.nothinking_bonus=$nothinking_bonus \
     reward_model.reward_kwargs.ref_result_file=$ref_result_file \
+    reward_model.reward_kwargs.nothinking_bonus=$nothinking_bonus \
+    reward_model.reward_kwargs.length_bonus=$length_bonus \
     data.train_files="$train_files" \
     data.val_files="$val_files" \
     data.train_batch_size=$batch_size \
