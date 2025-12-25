@@ -250,17 +250,18 @@ class AdaptThinkRewardManager:
                 ref_mean_acc = ref_metrics["avg_acc_thinking"]
                 ref_mean_len = ref_metrics["avg_len_thinking"]
 
-                base = acc - ref_mean_acc
-                reward = base
+                easiness = ref_mean_acc * 0.9 + self.eps
+                budget = ref_mean_len + self.eps
+                reward = acc - easiness
+
                 if acc:
                     if enforce_nothinking:
                         reward += self.nothinking_bonus
                     else:
-                        easiness = ref_mean_acc
-                        efficiency = mean_len_thinking / (ref_mean_len + self.eps)
-                        reward += math.exp(-efficiency * easiness) * self.length_bonus
+                        efficiency = mean_len_thinking / budget
+                        reward += self.length_bonus * math.exp(-efficiency * easiness)
 
-                score.update({"score": base, "reward": reward})
+                score.update({"score": acc, "reward": reward})
                 if enforce_nothinking:
                     score.update(
                         {
