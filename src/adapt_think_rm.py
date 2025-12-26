@@ -3,6 +3,7 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 
 Call grade_answer(given_answer: str, ground_truth: str).
 """
+
 import re
 from typing import Optional
 
@@ -12,6 +13,7 @@ from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
 # logging.info("DeepscaleR Here!!!")
+
 
 # Dan Hendrycks' code
 def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
@@ -26,6 +28,7 @@ def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
         return _strip_string(answer)
     except:
         return answer
+
 
 def _strip_string(string):
     def _fix_fracs(string):
@@ -59,7 +62,6 @@ def _strip_string(string):
         string = new_str
         return string
 
-
     def _fix_a_slash_b(string):
         if len(string.split("/")) != 2:
             return string
@@ -74,7 +76,6 @@ def _strip_string(string):
         except:
             return string
 
-
     def _remove_right_units(string):
         # "\\text{ " only ever occurs (at least in the val set) when describing units
         if "\\text{ " in string:
@@ -83,7 +84,6 @@ def _strip_string(string):
             return splits[0]
         else:
             return string
-
 
     def _fix_sqrt(string):
         if "\\sqrt" not in string:
@@ -98,6 +98,7 @@ def _strip_string(string):
                 new_substr = "\\sqrt" + split
             new_string += new_substr
         return new_string
+
     # linebreaks
     string = string.replace("\n", "")
     # print(string)
@@ -410,16 +411,17 @@ def last_boxed_only_string(string):
     if right_brace_idx == None:
         retval = None
     else:
-        retval = string[idx:right_brace_idx + 1]
+        retval = string[idx : right_brace_idx + 1]
 
     return retval
+
 
 def remove_boxed(s):
     left = "\\boxed{"
     try:
-        assert s[:len(left)] == left
+        assert s[: len(left)] == left
         assert s[-1] == "}"
-        return s[len(left):-1]
+        return s[len(left) : -1]
     except:
         return None
 
@@ -429,6 +431,7 @@ def extract_boxed_answer(solution: str) -> str:
     solution = last_boxed_only_string(solution)
     solution = remove_boxed(solution)
     return solution
+
 
 def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized = _normalize(ground_truth)
@@ -469,6 +472,7 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
 
     return is_correct
 
+
 def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized_mathd = mathd_normalize_answer(ground_truth)
     given_answer_normalized_mathd = mathd_normalize_answer(given_answer)
@@ -478,10 +482,12 @@ def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
         return True
     return False
 
+
 def extract_answer(passage: str) -> str:
     if "\\boxed" in passage:
         return extract_boxed_answer(passage)
     return None
+
 
 def _get_deepscaler_rule_base_reward(model_answer, label):
 
@@ -515,11 +521,14 @@ def _get_deepscaler_rule_base_reward(model_answer, label):
 
     # Check against all possible correct answers
     for ground_truth in processed_ground_truths:
-        is_correct = grade_answer_mathd(model_answer, ground_truth) or grade_answer_sympy(model_answer, ground_truth)
+        is_correct = grade_answer_mathd(
+            model_answer, ground_truth
+        ) or grade_answer_sympy(model_answer, ground_truth)
         if is_correct:
             return 1
 
     return 0
+
 
 def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
@@ -539,7 +548,7 @@ def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> 
         pred = "ERROR: Multiple <think>"
         # print(pred)
         acc = 0
-    elif solution_str.count('</think>') != 1:
+    elif solution_str.count("</think>") != 1:
         pred = f"ERROR: Num of </think> == {solution_str.count('</think>')}"
         acc = 0
     else:
@@ -556,6 +565,7 @@ def adapt_think_rm(data_source, solution_str, ground_truth, extra_info=None) -> 
         "acc": acc,
         "pred": pred,
     }
+
 
 def nothinking_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
@@ -591,6 +601,7 @@ def nothinking_rm(data_source, solution_str, ground_truth, extra_info=None) -> f
         "pred": pred,
     }
 
+
 def multi_choice_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
 
@@ -621,6 +632,7 @@ def multi_choice_rm(data_source, solution_str, ground_truth, extra_info=None) ->
         "acc": acc,
         "pred": pred,
     }
+
 
 def hf_math_rm(data_source, solution_str, ground_truth, extra_info=None) -> float:
     """Compute the reward score for a solution.
@@ -654,6 +666,7 @@ def hf_math_rm(data_source, solution_str, ground_truth, extra_info=None) -> floa
         "pred": pred,
     }
 
+
 if __name__ == "__main__":
     solution = "xxxx"
-    print(hf_math_rm('', solution, '1'))
+    print(hf_math_rm("", solution, "1"))
