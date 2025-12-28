@@ -84,6 +84,5 @@ python3 -m src.main_ppo \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
     trainer.total_epochs=2 \
-    trainer.resume_from_path="dev/AdaptThink/ckpts/adaptive_reasoning/dsr1-1.5b_deepscaler_btz128_n16_nr0.5_sl16384_fl_nb0.1_lb0.1_lr2e-6_v4"
     custom_reward_function.path="./src/adapt_think_rm.py" \
     custom_reward_function.name="adapt_think_rm" \

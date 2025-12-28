@@ -81,6 +81,7 @@ python3 -m src.main_ppo \
     actor_rollout_ref.rollout.n=$n_rollout \
     actor_rollout_ref.rollout.temperature=0.6 \
     actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.enable_chunked_prefill=True \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
