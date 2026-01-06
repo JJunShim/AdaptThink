@@ -318,13 +318,13 @@ class AdaptThinkRewardManager:
 
             # Nothinking bonus: apply when correct AND enforce_nothinking is True
             nothinking_bonus_mask = acc_mask & enforce_mask
-            reward = reward + nothinking_bonus_mask.float() * self.nothinking_bonus
+            reward += nothinking_bonus_mask.float() * self.nothinking_bonus
 
             # Thinking bonus: apply when correct AND enforce_nothinking is False
             thinking_bonus_mask = acc_mask & ~enforce_mask
             efficiency = mean_len_thinking / budget
             thinking_bonus = self.length_bonus * torch.exp(-efficiency * easiness)
-            reward = reward + thinking_bonus_mask.float() * thinking_bonus
+            reward += thinking_bonus_mask.float() * thinking_bonus
 
             # Create separate reward views for logging
             nothinking_reward = torch.where(
