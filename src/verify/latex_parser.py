@@ -4,7 +4,7 @@ import random
 from typing import Any, Dict, Optional, Tuple
 
 import sympy
-from latex2sympy2 import latex2sympy
+from latex2sympy2_extended import latex2sympy
 from sympy import Expr, I, Matrix, Symbol, pi
 from sympy.core.relational import Equality, Relational
 from sympy.parsing import sympy_parser
