@@ -279,7 +279,9 @@ class AdaptThinkRewardManager:
                         id2std_len[mode][uid] = 1.0
                     else:
                         id2mean_len[mode][uid] = correct_lengths.mean().item()
-                        id2std_len[mode][uid] = (correct_lengths.std() + 1e-7).item()
+                        id2std_len[mode][uid] = (
+                            correct_lengths.std() + self.eps
+                        ).item()
 
         # =====================
         # VECTORIZED REWARD COMPUTATION

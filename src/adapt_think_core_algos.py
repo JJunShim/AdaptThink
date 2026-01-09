@@ -13,20 +13,8 @@ def compute_batchwise_outcome_advantage(
     index: np.ndarray,
     epsilon: float = 1e-6,
 ):
-    """
-    Compute batch-wise normalized advantage
-    (NOT GRPO: baseline is computed over the entire batch).
-
-    Args:
-        token_level_rewards: (bs, response_length)
-        response_mask: (bs, response_length)
-
-    Returns:
-        advantages: (bs, response_length)
-        returns:    (bs, response_length)
-    """
-    # (bs,)
-    scores = token_level_rewards.sum(dim=-1)
+    lengths = response_mask.sum(dim=-1).clamp_min(1)
+    scores = (token_level_rewards * response_mask).sum(dim=-1) / lengths
 
     with torch.no_grad():
         mean = scores.mean()
@@ -34,8 +22,8 @@ def compute_batchwise_outcome_advantage(
 
         norm_scores = (scores - mean) / (std + epsilon)
 
-        # broadcast to token level
-        advantages = norm_scores.unsqueeze(-1) * response_mask
+    # broadcast to token level
+    advantages = norm_scores.unsqueeze(-1) * response_mask
 
     return advantages, advantages
 
