@@ -19,9 +19,9 @@ nothinking_bonus=0.1
 length_bonus=0.1
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json"
-reward_func=4.2
+reward_func=4.4
 
-PROJECT_NAME="adaptive_reasoning"
+PROJECT_NAME="When2Think"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # path to your download HF model
 EXP_NAME="dsr1-1.5b_${train_dataset}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}_v${reward_func}"
 CKPT_DIR="./ckpts/${PROJECT_NAME}/${EXP_NAME}"

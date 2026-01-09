@@ -1,5 +1,4 @@
 import math
-from collections import defaultdict
 
 import numpy as np
 import torch
@@ -13,8 +12,7 @@ def compute_batchwise_outcome_advantage(
     index: np.ndarray,
     epsilon: float = 1e-6,
 ):
-    lengths = response_mask.sum(dim=-1).clamp_min(1)
-    scores = (token_level_rewards * response_mask).sum(dim=-1) / lengths
+    scores = verl_F.masked_mean(token_level_rewards, response_mask, axis=-1)
 
     with torch.no_grad():
         mean = scores.mean()
@@ -127,12 +125,13 @@ def compute_policy_loss(
         old_log_prob[~enforce_nothinking, 0] = (
             math.log(1 - nothinking_ratio) if nothinking_ratio < 1 else -1e9
         )
-        # print(f"NEW LOG PROBS\n{old_log_prob[:, 0].exp()}\n\n")
+
         log_prob = verl_F.masked_mean(log_prob, response_mask, axis=-1)  # (bs, )
         old_log_prob = verl_F.masked_mean(old_log_prob, response_mask, axis=-1)
+        advantages = verl_F.masked_mean(advantages, response_mask, axis=-1)
+
         negative_approx_kl = log_prob - old_log_prob
         ratio = torch.exp(negative_approx_kl)
-        advantages = advantages[:, 0]
 
         pg_losses1 = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(
@@ -140,6 +139,7 @@ def compute_policy_loss(
         )  # - clip(ratio, 1-cliprange, 1+cliprange) * A
         pg_losses = torch.maximum(pg_losses1, pg_losses2)
         pg_loss = torch.mean(pg_losses)
+
         return pg_loss, None, None, None
     else:
         negative_approx_kl = log_prob - old_log_prob
