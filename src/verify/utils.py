@@ -5,6 +5,8 @@ import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
+from .constants import *
+
 
 # Dan Hendrycks' code
 def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
@@ -157,12 +159,6 @@ def _strip_string(string):
     string = _fix_a_slash_b(string)
 
     return string
-
-
-# sympy might hang -- we don't care about trying to be lenient in these cases
-BAD_SUBSTRINGS = ["^{", "^("]
-BAD_REGEXES = ["\^[0-9]+\^", "\^[0-9][0-9]+"]
-TUPLE_CHARS = "()[]"
 
 
 def _sympy_parse(expr: str):

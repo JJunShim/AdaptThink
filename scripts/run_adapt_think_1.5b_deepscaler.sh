@@ -19,7 +19,7 @@ nothinking_bonus=0.1
 length_bonus=0.1
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json"
-reward_func=4.4
+reward_func=4.2
 
 PROJECT_NAME="When2Think"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # path to your download HF model

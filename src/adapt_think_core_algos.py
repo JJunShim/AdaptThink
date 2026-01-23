@@ -6,22 +6,48 @@ import torch
 import verl.utils.torch_functional as verl_F
 
 
+def masked_mean(values, mask, dim=-1, eps=1e-8):
+    mask_count = mask.sum(dim=dim) + eps
+    return (values * mask).sum(dim=dim) / mask_count
+
+
+def masked_std(values, mean, mask, dim=-1, eps=1e-8):
+    mask_count = mask.sum(dim=dim) + eps
+    masked_var = ((values - mean) ** 2 * mask).sum(dim=dim) / mask_count
+    return torch.sqrt(masked_var + eps)
+
+
+def whiten(x, mask=None, dim=-1, eps=1e-8):
+    if mask is None:
+        # Standard normalization without mask
+        mean = x.mean(dim=dim)
+        std = x.std(dim=dim, unbiased=False)
+    else:
+        # Masked normalization
+        # Convert mask to same dtype as x for proper computation
+        mask = mask.to(x.dtype)
+
+        mean = masked_mean(x, mask, dim, eps)
+        std = masked_std(x, mean, mask, dim, eps)
+
+    # Normalize
+    return (x - mean) / (std + eps)
+
+
 def compute_batchwise_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
     epsilon: float = 1e-6,
 ):
-    scores = verl_F.masked_mean(token_level_rewards, response_mask, axis=-1)
+    dim = -1
+    scores = token_level_rewards.sum(dim=dim)
+    # scores = verl_F.masked_mean(token_level_rewards, response_mask, axis=dim)
+    # scores = masked_mean(token_level_rewards, response_mask, eps=epsilon)
 
     with torch.no_grad():
-        mean = scores.mean()
-        std = scores.std(unbiased=False)
-
-        norm_scores = (scores - mean) / (std + epsilon)
-
-    # broadcast to token level
-    advantages = norm_scores.unsqueeze(-1) * response_mask
+        scores = whiten(scores, dim=dim, eps=epsilon)
+        advantages = scores.unsqueeze(dim) * response_mask
 
     return advantages, advantages
 

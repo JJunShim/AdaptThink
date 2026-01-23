@@ -19,11 +19,11 @@ nothinking_bonus=0.1
 length_bonus=0.1
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-7B_deepscaler_K16_len16384.json"
-reward_func=4.2
+reward_func=4.2.1
 
 PROJECT_NAME="When2Think-7B"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # path to your download HF model
-EXP_NAME="dsr1-7b_${train_dataset}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}_v${reward_func}"
+EXP_NAME="dsr1-7b_${train_dataset}_v${reward_func}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}"
 CKPT_DIR="./ckpts/${PROJECT_NAME}/${EXP_NAME}"
 
 # Train over a single node, 8 A100-80GB GPUs.
@@ -67,7 +67,7 @@ python3 -m src.main_ppo \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=32768 \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=2 \
     actor_rollout_ref.actor.optim.lr=$LR \
-    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.rollout.name=vllm \

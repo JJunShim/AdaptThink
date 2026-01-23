@@ -289,8 +289,13 @@ class AdaptThinkRewardManager:
         acc = torch.tensor(
             [s["acc"] for s in all_scores], dtype=torch.float32, device=device
         )
+        reward = acc
 
         if self.is_training:
+            acc_mask = acc.bool()
+            nothinking_bonus_mask = acc_mask & enforce_mask
+            thinking_bonus_mask = acc_mask & ~enforce_mask
+
             # Build per-sample tensors
             mean_len_thinking = torch.tensor(
                 [id2mean_len["thinking"][uid] for uid in uids],
@@ -309,23 +314,15 @@ class AdaptThinkRewardManager:
             )
 
             # Compute easiness and budget
-            easiness = ref_mean_acc * 0.9 + self.eps
+            scale = 0.9
+            easiness = ref_mean_acc * scale + self.eps
             budget = ref_mean_len + self.eps
-
-            # Base reward
-            reward = acc - easiness
-
-            # Add bonuses (vectorized)
-            acc_mask = acc.bool()
-
-            # Nothinking bonus: apply when correct AND enforce_nothinking is True
-            nothinking_bonus_mask = acc_mask & enforce_mask
-            reward += nothinking_bonus_mask.float() * self.nothinking_bonus
-
-            # Thinking bonus: apply when correct AND enforce_nothinking is False
-            thinking_bonus_mask = acc_mask & ~enforce_mask
             efficiency = mean_len_thinking / budget
             thinking_bonus = self.length_bonus * torch.exp(-efficiency * easiness)
+
+            # reward
+            reward -= easiness
+            reward += nothinking_bonus_mask.float() * self.nothinking_bonus
             reward += thinking_bonus_mask.float() * thinking_bonus
 
             # Create separate reward views for logging
@@ -340,7 +337,6 @@ class AdaptThinkRewardManager:
             # reward = torch.tensor(
             #     [s["score"] for s in all_scores], dtype=torch.float32, device=device
             # )
-            reward = acc
             nothinking_reward = torch.full((N,), float("nan"), device=device)
             thinking_reward = torch.full((N,), float("nan"), device=device)
 
