@@ -9,21 +9,21 @@ val_files="['./data/test/preprocessed_data/gsm8k.parquet','./data/test/preproces
 batch_size=64
 n_rollout=16
 max_response_length=16384
-LR=3e-6
+LR=2e-6
 
 nothinking_ratio=0.5
 nothinking_max_response_length=4096
 end_of_think_token_id=151649 # </think>
 non_end_of_think_token_id=71486 # "Alright"
-nothinking_bonus=0.1
+nothinking_bonus=0.07
 length_bonus=0.1
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-7B_deepscaler_K16_len16384.json"
-reward_func=4.2.1
+reward_func=4.2
 
 PROJECT_NAME="When2Think-7B"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # path to your download HF model
-EXP_NAME="dsr1-7b_${train_dataset}_v${reward_func}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}"
+EXP_NAME="v${reward_func}_dsr1-7b_${train_dataset}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}"
 CKPT_DIR="./ckpts/${PROJECT_NAME}/${EXP_NAME}"
 
 # Train over a single node, 8 A100-80GB GPUs.

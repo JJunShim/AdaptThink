@@ -74,6 +74,13 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     return is_correct
 
 
+def grade_answer_hf_math(given_answer: str, ground_truth: str) -> bool:
+    preds = parse(given_answer)
+    gold = parse(ground_truth)
+
+    return verify(gold, preds)
+
+
 def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized_mathd = mathd_normalize_answer(ground_truth)
     given_answer_normalized_mathd = mathd_normalize_answer(given_answer)
@@ -81,7 +88,9 @@ def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
     # be at least as lenient as mathd
     if ground_truth_normalized_mathd == given_answer_normalized_mathd:
         return True
-    elif grade_answer_sympy(given_answer, ground_truth):
+    # elif grade_answer_sympy(given_answer, ground_truth):
+    #     return True
+    elif grade_answer_hf_math(given_answer, ground_truth):
         return True
     elif is_equiv(ground_truth, given_answer):
         return True
@@ -245,9 +254,7 @@ def hf_math_rm(data_source, solution_str, ground_truth, extra_info=None) -> floa
 
     model_solution = solution_str.strip()[-500:]
 
-    preds = parse(model_solution)
-    gold = parse(ground_truth)
-    acc = verify(gold, preds)
+    acc = grade_answer_hf_math(model_solution, ground_truth)
 
     if preds is None or preds == []:
         pred = "ERROR: Answer Extraction Failed"

@@ -46,7 +46,7 @@ def compute_batchwise_outcome_advantage(
     # scores = masked_mean(token_level_rewards, response_mask, eps=epsilon)
 
     with torch.no_grad():
-        scores = whiten(scores, dim=dim, eps=epsilon)
+        scores = whiten(scores, dim=0, eps=epsilon)
         advantages = scores.unsqueeze(dim) * response_mask
 
     return advantages, advantages
