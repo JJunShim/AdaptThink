@@ -15,15 +15,15 @@ nothinking_ratio=0.5
 nothinking_max_response_length=4096
 end_of_think_token_id=151649 # </think>
 non_end_of_think_token_id=71486 # "Alright"
-nothinking_bonus=0.1
-length_bonus=0.1
+nothinking_bonus=0.05
+length_bonus=0.03
 adjust_old_logprobs=True
 ref_result_file="./data/train/ref_results/DeepSeek-R1-Distill-Qwen-1.5B_deepscaler_K16_len16384.json"
 reward_func=4.2
 
 PROJECT_NAME="When2Think"
 MODEL_PATH="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # path to your download HF model
-EXP_NAME="dsr1-1.5b_${train_dataset}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}_v${reward_func}"
+EXP_NAME="v${reward_func}_dsr1-1.5b_${train_dataset}_btz${batch_size}_n${n_rollout}_nr${nothinking_ratio}_sl${max_response_length}_fl${adapt_think_max_response_length}_nb${nothinking_bonus}_lb${length_bonus}_lr${LR}"
 CKPT_DIR="./ckpts/${PROJECT_NAME}/${EXP_NAME}"
 
 # Train over a single node, 8 A100-80GB GPUs.
