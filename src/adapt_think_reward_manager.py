@@ -324,6 +324,7 @@ class AdaptThinkRewardManager:
             reward -= easiness
             reward += nothinking_bonus_mask.float() * self.nothinking_bonus
             reward += thinking_bonus_mask.float() * thinking_bonus
+            # reward *= acc_mask
 
             # Create separate reward views for logging
             nothinking_reward = torch.where(
