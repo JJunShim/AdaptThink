@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import json
+import re
 from collections import defaultdict
 
 import torch
 from tqdm import tqdm
-
-from verl import DataProto
 
 from .adapt_think_rm import adapt_think_rm
 
@@ -50,6 +49,8 @@ class AdaptThinkRewardManager:
         self.length_bonus = length_bonus
         self.problem2ref_metrics = {}
 
+        self._problem_re = re.compile(r"<｜User｜>(.*?)<｜Assistant｜>", re.DOTALL)
+
         if self.is_training:
             if ref_result_file is None:
                 raise ValueError("ref_result_file is required when is_training=True")
@@ -66,15 +67,10 @@ class AdaptThinkRewardManager:
             print(f"  - NOTHINKING BONUS: {self.nothinking_bonus}")
             print(f"  - LENGTH BONUS: {self.length_bonus}\n\n")
 
-    def __call__(self, data: DataProto, return_dict=False):
-        """Fully vectorized reward computation"""
-
+    def __call__(self, data, return_dict=False):
         if "rm_scores" in data.batch.keys():
-            return (
-                {"reward_tensor": data.batch["rm_scores"]}
-                if return_dict
-                else data.batch["rm_scores"]
-            )
+            scores = data.batch["rm_scores"]
+            return {"reward_tensor": scores} if return_dict else scores
 
         device = data.batch["responses"].device
         N = len(data)
@@ -82,9 +78,82 @@ class AdaptThinkRewardManager:
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
 
-        # =====================
-        # BATCH EXTRACTION (vectorized where possible)
-        # =====================
+        # ── 1. 배치 추출 ─────────────────────────────────────────────────
+        meta = self._extract_batch_metadata(data, N, device)
+
+        # ── 2. 일괄 디코딩 ───────────────────────────────────────────────
+        prompt_strs = self.tokenizer.batch_decode(
+            meta["prompt_ids_list"], skip_special_tokens=True
+        )
+        response_strs = self.tokenizer.batch_decode(
+            meta["response_ids_list"], skip_special_tokens=True
+        )
+        is_nothinking_list = [r.strip().startswith("</think>") for r in response_strs]
+
+        # ── 3. 점수 계산 ─────────────────────────────────────────────────
+        all_scores, id2scores, uid2ref_metrics = self._compute_scores(
+            N, meta, prompt_strs, response_strs, is_nothinking_list
+        )
+
+        # ── 4. UID 집계 통계 ─────────────────────────────────────────────
+        id2mean_len = self._compute_uid_stats(id2scores)
+
+        # ── 5. 보상 계산 ─────────────────────────────────────────────────
+        reward, enforce_mask = self._compute_reward(
+            N, all_scores, meta, uid2ref_metrics, id2mean_len, device
+        )
+
+        # ── 6. Scatter ───────────────────────────────────────────────────
+        idx = torch.arange(N, device=device)
+        reward_tensor[idx, meta["valid_response_lengths"] - 1] = reward
+
+        # ── 7. Extra info ────────────────────────────────────────────────
+        reward_extra_info = self._build_extra_info(all_scores, reward, enforce_mask)
+
+        if return_dict:
+            return {
+                "reward_tensor": reward_tensor,
+                "reward_extra_info": reward_extra_info,
+            }
+        return reward_tensor
+
+    @staticmethod
+    def _resolve_mode(enforce_nothinking: bool, is_nothinking: bool) -> str:
+        return "nothinking" if (enforce_nothinking or is_nothinking) else "thinking"
+
+    @staticmethod
+    def _build_score_fields(
+        score, resp_len, ground_truth, enforce_nothinking, is_nothinking, mode
+    ):
+        is_nt = mode == "nothinking"
+        return {
+            "response_length": resp_len,
+            "ground_truth": str(ground_truth),
+            "enforce_nothinking": enforce_nothinking,
+            "is_nothinking": is_nothinking,
+            "nothinking_response_length": resp_len if is_nt else None,
+            "nothinking_acc": score["acc"] if is_nt else None,
+            "thinking_response_length": None if is_nt else resp_len,
+            "thinking_acc": None if is_nt else score["acc"],
+        }
+
+    def _print_debug_info(self, print_key: str, prompt: str, score: dict) -> None:
+        """Print structured debug information with sorted keys."""
+        header = [
+            "",
+            "",
+            f"[data_source] {print_key}",
+            f"[prompt] {prompt}",
+        ]
+        body = [f"[{k}] {score[k]}" for k in sorted(score)]
+
+        print("\n".join(header + body))
+
+    def _parse_problem(self, prompt_str: str) -> str:
+        m = self._problem_re.search(prompt_str)
+        return m.group(1).strip() if m else prompt_str
+
+    def _extract_batch_metadata(self, data, N, device):
         valid_prompt_lengths = torch.zeros(N, dtype=torch.long, device=device)
         valid_response_lengths = torch.zeros(N, dtype=torch.long, device=device)
         enforce_mask = torch.zeros(N, dtype=torch.bool, device=device)
@@ -96,284 +165,218 @@ class AdaptThinkRewardManager:
         extra_infos = []
         uids = []
 
-        for i in range(N):
-            data_item = data[i]
-            prompt_ids = data_item.batch["prompts"]
-            response_ids = data_item.batch["responses"]
-            attention_mask = data_item.batch["attention_mask"]
-            prompt_length = prompt_ids.shape[-1]
+        for i, item in enumerate(data):
+            batch = item.batch
+            non_tensor = item.non_tensor_batch
 
-            # Vectorized length computation
-            valid_prompt_length = attention_mask[:prompt_length].sum()
-            valid_response_length = attention_mask[prompt_length:].sum()
+            prompt_ids = batch["prompts"]
+            response_ids = batch["responses"]
+            attention_mask = batch["attention_mask"]
+            prompt_len = prompt_ids.shape[-1]
 
-            valid_prompt_lengths[i] = valid_prompt_length
-            valid_response_lengths[i] = valid_response_length
-            enforce_mask[i] = data_item.batch["enforce_nothinking"]
+            valid_prompt_len = attention_mask[:prompt_len].sum()
+            valid_resp_len = attention_mask[prompt_len:].sum()
 
-            prompt_ids_list.append(prompt_ids[-valid_prompt_length:])
-            response_ids_list.append(response_ids[:valid_response_length])
+            valid_prompt_lengths[i] = valid_prompt_len
+            valid_response_lengths[i] = valid_resp_len
+            enforce_mask[i] = batch["enforce_nothinking"]
 
-            # Collect metadata
-            ground_truths.append(
-                data_item.non_tensor_batch["reward_model"]["ground_truth"]
-            )
-            data_sources.append(data_item.non_tensor_batch[self.reward_fn_key])
-            extra_infos.append(data_item.non_tensor_batch.get("extra_info", None))
-            uids.append(
-                data_item.non_tensor_batch["uid"] if self.is_training else "validate"
-            )
+            prompt_ids_list.append(prompt_ids[-valid_prompt_len:])
+            response_ids_list.append(response_ids[:valid_resp_len])
 
-        # Batch decode all at once
-        prompt_strs = self.tokenizer.batch_decode(
-            prompt_ids_list, skip_special_tokens=True
-        )
-        response_strs = self.tokenizer.batch_decode(
-            response_ids_list, skip_special_tokens=True
-        )
+            ground_truths.append(non_tensor["reward_model"]["ground_truth"])
+            data_sources.append(non_tensor[self.reward_fn_key])
+            extra_infos.append(non_tensor.get("extra_info"))
 
-        # Check if responses start with </think> (vectorized string op)
-        is_nothinking_list = [r.strip().startswith("</think>") for r in response_strs]
+            uids.append(non_tensor["uid"] if self.is_training else "validate")
 
-        # =====================
-        # COMPUTE SCORES (parallelizable if compute_score supports it)
-        # =====================
+        return {
+            "valid_prompt_lengths": valid_prompt_lengths,
+            "valid_response_lengths": valid_response_lengths,
+            "enforce_mask": enforce_mask,
+            "prompt_ids_list": prompt_ids_list,
+            "response_ids_list": response_ids_list,
+            "ground_truths": ground_truths,
+            "data_sources": data_sources,
+            "extra_infos": extra_infos,
+            "uids": uids,
+        }
+
+    def _compute_scores(self, N, meta, prompt_strs, response_strs, is_nothinking_list):
+        resp_len_cpu = meta["valid_response_lengths"].cpu().tolist()
+        enforce_cpu = meta["enforce_mask"].cpu().tolist()
+
+        data_sources = meta["data_sources"]
+        ground_truths = meta["ground_truths"]
+        extra_infos = meta["extra_infos"]
+        uids = meta["uids"]
+
         all_scores = []
         id2scores = {"nothinking": defaultdict(list), "thinking": defaultdict(list)}
         uid2ref_metrics = {}
         already_print_data_sources = {}
 
-        # Batch score computation (if possible)
-        for i in range(N):
+        for i, (
+            data_source,
+            solution_str,
+            ground_truth,
+            extra_info,
+            prompt_str,
+            is_nothinking,
+            resp_len,
+            enforce_nothinking,
+        ) in enumerate(
+            zip(
+                data_sources,
+                response_strs,
+                ground_truths,
+                extra_infos,
+                prompt_strs,
+                is_nothinking_list,
+                resp_len_cpu,
+                enforce_cpu,
+            )
+        ):
+
             score = self.compute_score(
-                data_source=data_sources[i],
-                solution_str=response_strs[i],
-                ground_truth=ground_truths[i],
-                extra_info=extra_infos[i],
+                data_source=data_source,
+                solution_str=solution_str,
+                ground_truth=ground_truth,
+                extra_info=extra_info,
             )
 
-            is_nothinking = is_nothinking_list[i]
-            enforce_nothinking = enforce_mask[i].item()
+            mode = self._resolve_mode(enforce_nothinking, is_nothinking)
 
-            # Training-specific bookkeeping
+            score.update(
+                self._build_score_fields(
+                    score=score,
+                    resp_len=resp_len,
+                    ground_truth=ground_truth,
+                    enforce_nothinking=enforce_nothinking,
+                    is_nothinking=is_nothinking,
+                    mode=mode,
+                )
+            )
+
             if self.is_training:
                 uid = uids[i]
+                id2scores[mode][uid].append(score)
 
-                if enforce_nothinking:
-                    score.update(
-                        {
-                            "response_length": valid_response_lengths[i].item(),
-                            "ground_truth": str(ground_truths[i]),
-                            "enforce_nothinking": enforce_nothinking,
-                            "is_nothinking": is_nothinking,
-                            "nothinking_response_length": valid_response_lengths[
-                                i
-                            ].item(),
-                            "nothinking_acc": score["acc"],
-                            "thinking_response_length": None,
-                            "thinking_acc": None,
-                        }
-                    )
-                    id2scores["nothinking"][uid].append(score)
-                else:
-                    score.update(
-                        {
-                            "response_length": valid_response_lengths[i].item(),
-                            "ground_truth": str(ground_truths[i]),
-                            "enforce_nothinking": enforce_nothinking,
-                            "is_nothinking": is_nothinking,
-                            "nothinking_response_length": None,
-                            "nothinking_acc": None,
-                            "thinking_response_length": valid_response_lengths[
-                                i
-                            ].item(),
-                            "thinking_acc": score["acc"],
-                        }
-                    )
-                    id2scores["thinking"][uid].append(score)
-
-                # Extract problem (can be cached if repeated)
-                problem = (
-                    prompt_strs[i]
-                    .split("<｜User｜>")[1]
-                    .split("<｜Assistant｜>")[0]
-                    .strip()
-                )
+                problem = self._parse_problem(prompt_str)
                 if problem not in self.problem2ref_metrics:
                     raise KeyError(f"Problem not found in reference metrics: {problem}")
+
                 uid2ref_metrics[uid] = self.problem2ref_metrics[problem]
-            else:
-                # Validation-specific bookkeeping
-                if is_nothinking:
-                    score.update(
-                        {
-                            "response_length": valid_response_lengths[i].item(),
-                            "ground_truth": str(ground_truths[i]),
-                            "enforce_nothinking": enforce_nothinking,
-                            "is_nothinking": is_nothinking,
-                            "nothinking_response_length": valid_response_lengths[
-                                i
-                            ].item(),
-                            "nothinking_acc": score["acc"],
-                            "thinking_response_length": None,
-                            "thinking_acc": None,
-                        }
-                    )
-                else:
-                    score.update(
-                        {
-                            "response_length": valid_response_lengths[i].item(),
-                            "ground_truth": str(ground_truths[i]),
-                            "enforce_nothinking": enforce_nothinking,
-                            "is_nothinking": is_nothinking,
-                            "nothinking_response_length": None,
-                            "nothinking_acc": None,
-                            "thinking_response_length": valid_response_lengths[
-                                i
-                            ].item(),
-                            "thinking_acc": score["acc"],
-                        }
-                    )
 
             all_scores.append(score)
 
-            # Debug printing (rate-limited)
-            print_key = f"source_{data_sources[i]}_{'nothinking' if (enforce_nothinking if self.is_training else is_nothinking) else 'thinking'}"
+            # debug printing (rate-limited)
+            print_key = f"source_{data_source}_{mode}"
             if already_print_data_sources.get(print_key, 0) < self.num_examine:
                 already_print_data_sources[print_key] = (
                     already_print_data_sources.get(print_key, 0) + 1
                 )
-                self._print_debug_info(print_key, prompt_strs[i], score)
+                self._print_debug_info(print_key, prompt_str, score)
 
-        # =====================
-        # UID-AGGREGATE STATS (fully vectorized)
-        # =====================
-        id2mean_acc = defaultdict(dict)
+        return all_scores, id2scores, uid2ref_metrics
+
+    def _compute_uid_stats(self, id2scores):
         id2mean_len = defaultdict(dict)
-        id2std_len = defaultdict(dict)
 
-        if self.is_training:
-            for mode in ["nothinking", "thinking"]:
-                for uid, scores in id2scores[mode].items():
-                    if not scores:
-                        continue
+        if not self.is_training:
+            return id2mean_len
 
-                    # Vectorized stats computation
-                    accs = torch.tensor(
-                        [s["acc"] for s in scores], dtype=torch.float32, device=device
-                    )
-                    lengths = torch.tensor(
-                        [s["response_length"] for s in scores],
-                        dtype=torch.float32,
-                        device=device,
-                    )
+        for mode in ["nothinking", "thinking"]:
+            for uid, scores in id2scores[mode].items():
+                if not scores:
+                    continue
+                # CPU 리스트 연산 → GPU 동기화 0회
+                correct_lengths = [
+                    s["response_length"] for s in scores if s["acc"] == 1.0
+                ]
+                id2mean_len[mode][uid] = (
+                    sum(correct_lengths) / len(correct_lengths)
+                    if correct_lengths
+                    else 0.0
+                )
 
-                    id2mean_acc[mode][uid] = accs.mean().item()
+        return id2mean_len
 
-                    # Filter for correct answers only
-                    correct_mask = accs == 1
-                    correct_lengths = lengths[correct_mask]
+    def _compute_reward(
+        self, N, all_scores, meta, uid2ref_metrics, id2mean_len, device
+    ):
+        scale = 0.8
 
-                    if correct_lengths.numel() == 0:
-                        id2mean_len[mode][uid] = 0.0
-                        id2std_len[mode][uid] = 1.0
-                    else:
-                        id2mean_len[mode][uid] = correct_lengths.mean().item()
-                        id2std_len[mode][uid] = (
-                            correct_lengths.std() + self.eps
-                        ).item()
+        uids = meta["uids"]
+        enforce_mask = meta["enforce_mask"]
 
-        # =====================
-        # VECTORIZED REWARD COMPUTATION
-        # =====================
-        acc = torch.tensor(
-            [s["acc"] for s in all_scores], dtype=torch.float32, device=device
+        # ---- base reward ----
+        reward = torch.as_tensor(
+            [s["acc"] for s in all_scores],
+            dtype=torch.float32,
+            device=device,
         )
-        reward = acc
 
-        if self.is_training:
-            acc_mask = acc.bool()
-            nothinking_bonus_mask = acc_mask & enforce_mask
-            thinking_bonus_mask = acc_mask & ~enforce_mask
+        if not self.is_training:
+            return reward, enforce_mask
 
-            # Build per-sample tensors
-            mean_len_thinking = torch.tensor(
-                [id2mean_len["thinking"][uid] for uid in uids],
-                dtype=torch.float32,
-                device=device,
-            )
-            ref_mean_acc = torch.tensor(
-                [uid2ref_metrics[uid]["avg_acc_thinking"] for uid in uids],
-                dtype=torch.float32,
-                device=device,
-            )
-            ref_mean_len = torch.tensor(
-                [uid2ref_metrics[uid]["avg_len_thinking"] for uid in uids],
-                dtype=torch.float32,
-                device=device,
-            )
+        acc_mask = reward.bool()
 
-            # Compute easiness and budget
-            scale = 0.9
-            easiness = ref_mean_acc * scale + self.eps
-            budget = ref_mean_len + self.eps
-            efficiency = mean_len_thinking / budget
-            thinking_bonus = self.length_bonus * torch.exp(-efficiency * easiness)
+        # ---- masks ----
+        nothinking_mask = acc_mask & enforce_mask
+        thinking_mask = acc_mask & (~enforce_mask)
 
-            # reward
-            reward -= easiness
-            reward += nothinking_bonus_mask.float() * self.nothinking_bonus
-            reward += thinking_bonus_mask.float() * thinking_bonus
-            # reward *= acc_mask
+        # ---- reference tensors ----
+        ref_mean_acc = torch.as_tensor(
+            [uid2ref_metrics[uid]["avg_acc_thinking"] for uid in uids],
+            dtype=torch.float32,
+            device=device,
+        )
 
-            # Create separate reward views for logging
-            nothinking_reward = torch.where(
-                enforce_mask, reward, torch.tensor(float("nan"), device=device)
-            )
-            thinking_reward = torch.where(
-                ~enforce_mask, reward, torch.tensor(float("nan"), device=device)
-            )
-        else:
-            # Validation mode: reward is just the score
-            # reward = torch.tensor(
-            #     [s["score"] for s in all_scores], dtype=torch.float32, device=device
-            # )
-            nothinking_reward = torch.full((N,), float("nan"), device=device)
-            thinking_reward = torch.full((N,), float("nan"), device=device)
+        ref_mean_len = torch.as_tensor(
+            [uid2ref_metrics[uid]["avg_len_thinking"] for uid in uids],
+            dtype=torch.float32,
+            device=device,
+        )
 
-        # =====================
-        # WRITE BACK (fully vectorized)
-        # =====================
-        idx = torch.arange(N, device=device)
-        reward_tensor[idx, valid_response_lengths - 1] = reward
+        mean_len_thinking = torch.as_tensor(
+            [id2mean_len["thinking"].get(uid, 0.0) for uid in uids],
+            dtype=torch.float32,
+            device=device,
+        )
 
-        # Update scores and collect extra info
-        for i in range(N):
-            s = all_scores[i]
-            s["nothinking_reward"] = (
-                None
-                if torch.isnan(nothinking_reward[i])
-                else nothinking_reward[i].item()
-            )
-            s["thinking_reward"] = (
-                None if torch.isnan(thinking_reward[i]) else thinking_reward[i].item()
-            )
+        # ---- compute easiness ----
+        easiness = ref_mean_acc.mul(scale).add_(self.eps)
+
+        # ---- compute efficiency ----
+        efficiency = mean_len_thinking / (ref_mean_len + self.eps)
+
+        # ---- thinking bonus ----
+        thinking_bonus = torch.exp(-(efficiency * easiness))
+        thinking_bonus.mul_(self.length_bonus)
+
+        # ---- reward update ----
+        reward.sub_(easiness)
+
+        reward[nothinking_mask] += self.nothinking_bonus
+        reward[thinking_mask] += thinking_bonus[thinking_mask]
+        # reward *= acc_mask
+
+        return reward, enforce_mask
+
+    def _build_extra_info(self, all_scores, reward, enforce_mask):
+        reward_cpu = reward.cpu().tolist()
+        enforce_cpu = enforce_mask.cpu().tolist()
+        reward_extra_info = defaultdict(list)
+
+        for i, s in enumerate(all_scores):
+            r = reward_cpu[i]
+            is_nt = enforce_cpu[i]
+
+            s["nothinking_reward"] = r if is_nt else None
+            s["thinking_reward"] = None if is_nt else r
 
             for k, v in s.items():
                 reward_extra_info[k].append(v)
 
-        return (
-            {
-                "reward_tensor": reward_tensor,
-                "reward_extra_info": reward_extra_info,
-            }
-            if return_dict
-            else reward_tensor
-        )
-
-    def _print_debug_info(self, print_key: str, prompt: str, score: dict) -> None:
-        """Helper method for debug printing"""
-        print(f"\n\n[data_source]{print_key}")
-        print("[prompt]", prompt)
-        for key, value in score.items():
-            print(f"[{key}]", value)
+        return reward_extra_info

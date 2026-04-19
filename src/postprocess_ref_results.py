@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from adapt_think_rm import adapt_think_rm
+from src.adapt_think_rm import adapt_think_rm
 
 
 def parse_args():
